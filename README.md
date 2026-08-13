@@ -50,8 +50,8 @@ flowchart LR
 **The only path that costs money runs through the gate.** Everything the system already knows is
 answered from MongoDB for free.
 
-Every stage checkpoints. `cairn run <domain> --resume <run_id>` continues mid-flight — including
-resuming the Hermes agent **mid-conversation** from trajectories stored in MongoDB.
+Every stage checkpoints. `cairn run <domain> --resume <run_id>` continues mid-flight — see
+[Crash recovery](#crash-recovery-verified), which is verified against a real `kill -9`.
 
 ---
 
@@ -210,19 +210,19 @@ flowchart LR
     BR["<b>BRIEFER</b><br/>writes the brief<br/>tools: web"]
     RM["<b>RULEMAKER</b><br/>induces rules<br/>tools: none"]
 
-    CHEAP["<b>gpt-oss-120b</b><br/><i>cheap tier</i><br/>high volume · structured"]
+    CHEAP["<b>claude-haiku-4.5</b><br/><i>cheap tier</i><br/>high volume · structured"]
     STRONG["<b>claude-sonnet-4.6</b><br/><i>strong tier</i><br/>low volume · judgement"]
 
-    SC -->|"1× per run"| CHEAP
     GR -->|"<b>N× per run</b><br/>dominant cost"| CHEAP
+    SC -->|"1× per run"| STRONG
     BR -->|"only WINNABLE"| STRONG
     RM -->|"1× per run"| STRONG
 ```
 
 | Role | Model tier | Why |
 |---|---|---|
-| `SCOUT` | cheap | Generates a list against a supplied inventory. Structured, bounded. |
-| `GRADER` | cheap | Runs **N× per run** in parallel. The dominant cost centre — and reading a SERP is perception, not judgement. |
+| `SCOUT` | strong | Runs once per run, but must emit a long structured list. Reasoning-only models returned no visible content at all here, silently yielding zero candidates. |
+| `GRADER` | cheap | Runs **N× per run** in parallel. The dominant cost centre — and reading a SERP is perception, not judgement. Still needs to emit visible JSON every time: one model we tried returned reasoning-only responses on ~25% of calls, storing garbage as durable memory. |
 | `BRIEFER` | strong | Runs only for WINNABLE topics. Differentiated angle and information gain are exactly where model quality shows. |
 | `RULEMAKER` | strong | Once per run. Bad generalizations poison every future run, so this is the worst possible place to economize. |
 
@@ -277,6 +277,39 @@ The output is a **brief, not a draft.** The human gate stays before publication 
 is one thing, blindly publishing is where quality drift and SEO self-harm start.
 
 ---
+
+## Crash recovery, verified
+
+Checkpointing is only worth claiming if it survives a real crash, so this was tested by killing the
+process mid-grading with `kill -9` — not by a graceful stop.
+
+```
+CAUGHT: 3 of 8 verdicts done -> umami.is-bd3b6ef0
+CONFIRMED DEAD
+verdicts before resume: 3   briefs before resume: 0
+
+$ cairn run umami.is --resume umami.is-bd3b6ef0
+resuming umami.is-bd3b6ef0 from stage verdicts
+  3 verdict(s) already in MongoDB from before the crash — not re-grading them
+  ...5 remaining graded...
+  recovered un-briefed winner: umami analytics vs plausible
+  change stream delivered 4 WINNABLE verdict(s) to the brief stage
+
+verdict docs=8  distinct queries=8  -> NO DUPLICATES
+```
+
+Two things had to be right for that, and neither came free:
+
+- **Stage checkpoints are too coarse on their own.** The run resumes at the `verdicts` stage, but
+  grading is per-topic — a naive resume re-pays for every verdict already completed. The verdicts
+  already in MongoDB *are* the record of what finished, so the stage filters against them. This is
+  the project's own thesis applied to itself.
+- **Change streams only fire on insert.** A topic graded WINNABLE *before* the crash would never
+  reach the brief stage on resume, because no new insert happens for it. The stage now sweeps for
+  winners that still have no brief and recovers them.
+
+Hermes conversations are persisted to `runs.trajectories` and replayed via `conversation_history=`,
+so a resumed agent continues with its reasoning intact rather than restarting from a cold prompt.
 
 ## Setup
 

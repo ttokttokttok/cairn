@@ -233,6 +233,19 @@ def _stage_verdicts_and_briefs(
         console.print("  [dim]nothing survived the gate — memory did all the work[/]")
         return []
 
+    # Resume lands here with the stage's checkpoint, but grading is per-topic:
+    # a crash after N of M verdicts would otherwise re-pay for those N. The
+    # verdicts already in MongoDB are the record of what was finished.
+    done = set(get_db().verdicts.distinct("query", {"runId": run_id}))
+    if done:
+        survivors = [c for c in survivors if c["query"] not in done]
+        console.print(
+            f"  [green]{len(done)}[/] verdict(s) already in MongoDB from before "
+            f"the crash — not re-grading them"
+        )
+        if not survivors:
+            console.print("  [dim]all verdicts already graded[/]")
+
     winnable_q: queue.Queue = queue.Queue()
     stop = threading.Event()
     watcher = threading.Thread(
@@ -268,8 +281,25 @@ def _stage_verdicts_and_briefs(
     stop.set()
 
     winnable: list[dict] = []
+    seen: set[str] = set()
     while not winnable_q.empty():
-        winnable.append(winnable_q.get())
+        doc = winnable_q.get()
+        if doc.get("query") not in seen:
+            seen.add(doc.get("query"))
+            winnable.append(doc)
+
+    # The change stream only fires on inserts, so winners graded before a crash
+    # would never reach the brief stage on resume. Pick up any that still have
+    # no brief.
+    db = get_db()
+    for v in db.verdicts.find({"runId": run_id, "grade": "WINNABLE"}):
+        if v["query"] in seen:
+            continue
+        if db.briefs.find_one({"site": site, "query": v["query"]}, {"_id": 1}):
+            continue
+        seen.add(v["query"])
+        winnable.append(v)
+        console.print(f"  [green]recovered[/] un-briefed winner: {v['query']}")
 
     if not winnable:
         console.print("\n  [dim]no WINNABLE verdicts — no briefs this run[/]")
