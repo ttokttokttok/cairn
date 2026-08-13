@@ -118,6 +118,37 @@ def review(domain: str) -> None:
 
 
 @app.command()
+def sites() -> None:
+    """List every site being tracked. Each one keeps its own separate memory."""
+    db = get_db()
+    known = sorted(
+        set(db.sites.distinct("domain")) | set(db.pages.distinct("site"))
+    )
+    if not known:
+        console.print("no sites yet — run `cairn run <domain>` to add one")
+        return
+
+    table = Table(title="tracked sites", header_style="bold")
+    for col in ("site", "pages", "SERP verdicts", "rules", "briefs", "pending", "runs"):
+        table.add_column(col)
+    for s in known:
+        table.add_row(
+            s,
+            str(db.pages.count_documents({"site": s})),
+            str(db.verdicts.count_documents({"site": s})),
+            str(db.rules.count_documents({"site": s})),
+            str(db.briefs.count_documents({"site": s})),
+            str(db.briefs.count_documents({"site": s, "status": "pending_approval"})),
+            str(db.runs.count_documents({"site": s})),
+        )
+    console.print(table)
+    console.print(
+        "[dim]Memory is per-site: one site's pages, verdicts, and rules never "
+        "influence another's decisions.[/]"
+    )
+
+
+@app.command()
 def briefs(
     domain: str,
     status: str = typer.Option(None, help="Filter: pending_approval, approved, rejected."),

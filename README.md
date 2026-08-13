@@ -317,6 +317,25 @@ Two things had to be right for that, and neither came free:
 Hermes conversations are persisted to `runs.trajectories` and replayed via `conversation_history=`,
 so a resumed agent continues with its reasoning intact rather than restarting from a cold prompt.
 
+## Multiple sites
+
+One installation tracks any number of domains, and each keeps its own separate memory. Every
+document carries a `site` field, every read is filtered by it, and all three vector indexes declare
+`site` as a filter field — so one client's pages, verdicts, and rules never influence another's
+decisions. Verified: a query for a topic `plausible.io` covers returns **no matches** when asked
+against `umami.is`.
+
+```
+$ cairn sites
+site           pages   SERP verdicts   rules   briefs   pending   runs
+plausible.io      40               1       1        0         0      2
+umami.is           0               8       4        4         2      1
+```
+
+There is no shared cross-site memory, deliberately: SEO difficulty is a property of *a specific
+site's authority in a specific niche*, so a verdict earned by one domain says nothing reliable
+about another.
+
 ## Setup
 
 Requires Python 3.12 and [uv](https://docs.astral.sh/uv/).
@@ -339,6 +358,8 @@ uv run cairn init --wait  # create collections and Atlas search indexes
 ```bash
 uv run cairn run example.com                     # full pipeline
 uv run cairn run example.com --resume <run_id>   # continue after a crash
+
+uv run cairn sites                               # every site you're tracking
 
 # Seeing what the agent produced and why
 uv run cairn report example.com                  # ← standalone HTML: decisions, evidence, briefs
