@@ -386,6 +386,20 @@ The vector-index case matters more than it looks: silently returning zero matche
 *"no duplicates found"*, the most dangerous possible failure mode for this system. That is why it
 warns instead of degrading quietly.
 
+## Roadmap
+
+Two features were scoped and deliberately not built — see [`docs/ROADMAP.md`](docs/ROADMAP.md):
+
+- **Google Search Console as a fourth memory check.** Everything cairn knows today is external: what
+  your sitemap claims and what Google shows the public. GSC is the one source of *your own* truth,
+  and it enables the highest-value move in SEO — *"you already rank #8 for this, improve that page
+  instead of writing a new one."* Cut because it requires OAuth and only works on sites you have
+  verified, which would break the clone-and-point-at-any-domain property.
+- **An author agent with scoped repository access.** A second Hermes agent that turns an *approved*
+  brief into a pull request — create-only, inside one content directory, on its own branch, with no
+  terminal. It ends at a PR, never a deploy: the human gate before publication is a design position,
+  not an unfinished edge.
+
 ## License
 
 MIT

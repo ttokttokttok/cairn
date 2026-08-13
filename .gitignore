@@ -4,3 +4,5 @@ __pycache__/
 *.pyc
 vendor/
 uv.lock
+trajectory_samples.jsonl
+*-cairn.html
