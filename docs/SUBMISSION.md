@@ -1,103 +1,96 @@
 # Submission copy
 
-## Short version (~120 words)
+## Short version (~110 words)
 
-**SEO is how you get found on Google without paying for ads** — and for most companies it's the
-largest source of customers who arrive already looking for what you sell. The work is deciding what
-to publish. Most articles never rank, so the expensive mistakes all happen *before* anyone writes:
-targeting a search that documentation and Wikipedia already own, or writing a page that competes
-with one you already published and drags both down.
+We built a **Hermes multi-agent system for SEO** whose memory lives in MongoDB Atlas.
 
-Cairn is an agent that makes those decisions and refuses the bad ones. Every judgement it makes —
-what your site covers, which searches it graded unwinnable and why, what you rejected — lives in
-MongoDB Atlas and is checked *before* any model or web call runs.
+Four specialized Hermes agents — scout, grader, briefer, rulemaker — propose topics, read live
+SERPs, judge difficulty, and write content briefs. Between proposing a topic and paying to research
+it, every candidate passes a **memory gate**: three MongoDB checks that run before any model call or
+web request. Already covered? Keyword collision with an existing page? Already graded unwinnable?
+Stopped, for free, with the exact document that stopped it recorded.
 
-Measured on plausible.io: **22,359 tokens on run 1, 2,802 on run 2.**
+Retrieval here is control flow, not prompt filler — a hit doesn't get summarized into a prompt, it
+stops the stage.
+
+Measured on plausible.io: **22,359 tokens on run 1, 2,802 on run 2.** 10 of 10 candidates resolved
+from memory, zero live SERP reads paid for.
 
 ---
 
 ## Full version
 
-### What SEO is, and why it's worth automating
+### What we built
 
-SEO is getting your pages to show up on Google when someone searches for what you offer. It's the
-largest acquisition channel for most software companies, because the traffic is free and the intent
-is high — the person is already looking for you.
+A **Hermes multi-agent system for SEO** with its memory in MongoDB Atlas.
 
-The common intuition is that SEO means writing lots of articles. It mostly doesn't. Most articles
-never rank at all, and the reasons are decided long before anyone starts writing:
+Point it at any domain — no auth, no Search Console, it reads the public `sitemap.xml`. Four
+specialized Hermes agents then run a pipeline:
 
-- **The search is already owned.** If official documentation and Wikipedia fill the first page, a
-  marketing site will not displace them, however good the article is.
-- **You're competing with yourself.** Publish two pages targeting one intent and they split their
-  own authority and confuse the ranker. This is called *cannibalization*, it makes both pages worse,
-  and AI content pipelines don't just miss it — they publish the collision.
-- **You already rank and didn't notice.** Improving a page sitting at position 8 beats writing
-  anything new.
+| agent | job | tools | model tier |
+|---|---|---|---|
+| **scout** | propose candidate topics from the site's inventory + live research | web | strong |
+| **grader** ×N | read the live SERP, grade WINNABLE / CONTESTED / UNWINNABLE | web | cheap |
+| **briefer** | write the content brief for winners | web | strong |
+| **rulemaker** | induce reusable rules from the run's outcomes | none | strong |
 
-So the valuable question isn't "write me an article." It's **"what should we write, and can we
-actually win it?"** — and getting that wrong costs a full article's effort, which you don't discover
-for three to six months.
+Graders fan out across a thread pool with a fresh `AIAgent` per thread. Output is a **brief, not a
+published article** — the agent has no credentials to your site and no code path that writes to one.
 
-### What cairn does
+### The problem it solves
 
-Point it at any domain. No login, no tracking script, no Search Console — it reads your public
-`sitemap.xml`.
+A stateless SEO agent run twice redoes the same expensive research, proposes topics you already
+published, and recommends articles that compete with your own pages. That last one — cannibalization
+— makes both pages rank worse, and AI content pipelines don't catch it; they publish the collision.
 
-Four specialized Hermes agents propose topics, read live Google results, judge whether each is
-realistically winnable, and write a content **brief**: target keyword, the angle that beats what
-already ranks, a section outline, real internal links, and explicit do-not-cannibalize warnings.
-
-The output is a brief, not a published article. The agent never touches your site — it has no
-credentials and no code path that writes to one. Automating research is safe; automating publication
-is where quality drift starts.
+The expensive mistakes happen *before* anyone writes. So the agent's most valuable behaviour is
+refusing work.
 
 ### How we use MongoDB
 
 MongoDB isn't a log here. It's the component that **decides what the agent does next.**
 
-Between proposing a topic and paying to research it, every candidate passes a **memory gate** —
-three MongoDB checks that run before any model call or web request:
+Between proposing a topic and paying for it, every candidate passes a **memory gate** — three
+MongoDB checks, zero API calls:
 
-| check | index | the question it answers |
+| check | index | question |
 |---|---|---|
-| **Vector search** on `pages` | `pages_vec` | Do we already cover this intent? |
-| **Atlas Search** on `pages` | `pages_text` | Does this literally collide with an existing target keyword? |
-| **Vector search** on `verdicts` | `verdicts_vec` | Did we already judge this search unwinnable, and why? |
+| **Vector search** on `pages` | `pages_vec` | do we already cover this intent? |
+| **Atlas Search** on `pages` | `pages_text` | literal collision with an existing target keyword? |
+| **Vector search** on `verdicts` | `verdicts_vec` | already graded unwinnable, and why? |
 
-Anything the gate stops costs **nothing** — no tokens, no web call — and every veto records the `_id`
-of the MongoDB document responsible, so the agent's reasoning is auditable rather than magic.
+Anything stopped costs nothing, and every veto records the `_id` of the document responsible — so the
+reasoning is auditable rather than magic.
 
-**This is the difference between RAG and memory.** A RAG app retrieves documents and stuffs them into
-a prompt. Cairn retrieves and then *refuses to run the next stage*. Retrieval output here is control
-flow.
+**This is the difference between RAG and memory.** A RAG app retrieves and stuffs the result into a
+prompt. Cairn retrieves and then *refuses to run the next stage*.
 
 Six capabilities, each load-bearing:
 
 - **Automated Embedding (`autoEmbed`)** — documents carry text; Atlas generates and maintains the
-  vectors server-side using Voyage. No embedding pipeline, no second API key, and query and document
-  can never drift apart.
+  vectors server-side with Voyage. No embedding pipeline, no second API key, and query and document
+  can't drift apart.
 - **Vector Search ×3** — three indexes for three genuinely different veto decisions, not one index
   called "memory."
 - **Atlas Search** — the lexical half of cannibalization detection. Vector catches same-intent /
   different-words; keyword catches literal collision. Either alone misses half the cases.
-- **Change streams** — a watcher on `verdicts` pushes each winnable result to the brief stage the
-  instant it's inserted, so briefing begins while grading is still running.
+- **Change streams** — a watcher on `verdicts` pushes each WINNABLE result to the brief stage the
+  instant it's inserted, so briefing runs while grading is still going.
 - **Atomic `$inc`** — learned-rule confidence is a database write, so it's auditable and can't
   inflate itself.
 - **Aggregation** — the headline metric: share of candidates resolved from memory, run over run.
 
-**State and memory are deliberately separate.** `runs` is state — a stage cursor, disposable once the
-run ends. `pages`, `verdicts`, `rules`, and `briefs` are memory — cross-run, semantic, permanent. A
-crash loses none of the run; deleting the run loses none of the learning.
+**State and memory are deliberately separate.** `runs` is state — a stage cursor, disposable. `pages`,
+`verdicts`, `rules`, `briefs` are memory — cross-run, semantic, permanent. A crash loses none of the
+run; deleting the run loses none of the learning.
 
 Every document carries a `site` field and all three vector indexes declare `site` as a filter, so one
 install tracks any number of domains with fully isolated memory.
 
-### How Hermes is used
+### How we use Hermes
 
-Four `AIAgent` roles — scout, grader, briefer, rulemaker — each with its own system prompt, toolset,
-and model tier: a cheap model for high-volume SERP grading, a stronger one for judgement.
+Four `AIAgent` roles, each with its own system prompt, toolset, and model tier — cheap for
+high-volume SERP grading, strong for judgement.
 
 The central choice is what we turned **off**: `skip_memory=True`, `skip_context_files=True`. We
 replaced Hermes's private, local, single-session memory with a shared, queryable, cross-run memory in
@@ -109,18 +102,18 @@ agent continues mid-conversation instead of restarting cold.
 
 ### Results, measured
 
-| run | considered | resolved from memory | live searches paid for | tokens |
+| run | considered | resolved from memory | live SERP reads paid for | tokens |
 |---|---|---|---|---|
 | 1 (cold) | 10 | 9/10 | 1 | 22,359 |
 | 2 (warm) | 10 | **10/10** | **0** | **2,802** |
 
 87% fewer tokens. Even the cold run stopped 9 of 10 — the crawl fills the page inventory before the
-gate runs, so cannibalization detection pays for itself on the very first run.
+gate runs, so cannibalization detection pays for itself on the first run.
 
-Crash recovery was verified with a real `kill -9` mid-grading: on resume it skipped the verdicts
+**Crash recovery verified with a real `kill -9`** mid-grading: on resume it skipped the verdicts
 already in MongoDB, graded only what remained, recovered a winner that had been graded but not yet
 briefed, and finished with no duplicated work.
 
 A later run produced 6 briefs containing **29 internal links, every one verified to exist** in the
-crawled inventory. Every AI writing tool hallucinates these; cairn's come out of a vector search over
+crawled inventory. Every AI writing tool hallucinates these; cairn's come from a vector search over
 the site's own pages, so they can't be invented.
