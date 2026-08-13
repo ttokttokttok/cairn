@@ -18,6 +18,7 @@ class Settings:
     # Model routing: verdicts are high-volume and structured, briefs are
     # low-volume and quality-sensitive. Paying for a big model on every SERP
     # read would burn the OpenRouter credit for no gain.
+    scout_model: str
     verdict_model: str
     brief_model: str
     rule_model: str
@@ -51,7 +52,14 @@ def load_settings() -> Settings:
     return Settings(
         mongodb_uri=os.getenv("MONGODB_URI", ""),
         db_name=os.getenv("CAIRN_DB", "cairn"),
-        verdict_model=os.getenv("CAIRN_VERDICT_MODEL", "openai/gpt-oss-120b"),
+        # SCOUT runs once per run and must emit a long structured list.
+        # gpt-oss-120b reliably returns reasoning with no visible content for
+        # this shape of task, so the generation roles get the stronger tier.
+        scout_model=os.getenv("CAIRN_SCOUT_MODEL", "anthropic/claude-sonnet-4.6"),
+        # Cheap tier, but it must reliably emit visible JSON: gpt-oss-120b
+        # returned reasoning-only responses on roughly a quarter of calls,
+        # which stores a garbage verdict as durable memory.
+        verdict_model=os.getenv("CAIRN_VERDICT_MODEL", "anthropic/claude-haiku-4.5"),
         brief_model=os.getenv("CAIRN_BRIEF_MODEL", "anthropic/claude-sonnet-4.6"),
         rule_model=os.getenv("CAIRN_RULE_MODEL", "anthropic/claude-sonnet-4.6"),
         embed_backend=os.getenv("CAIRN_EMBED_BACKEND", "atlas"),

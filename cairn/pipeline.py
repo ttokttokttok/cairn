@@ -171,6 +171,15 @@ def _stage_candidates(
 
     cands = reply.json(default=[]) or []
     cands = [c for c in cands if isinstance(c, dict) and c.get("query")][:n]
+    if not cands:
+        # A run with zero candidates would sail through every later stage and
+        # report success having done nothing. Fail where the fault actually is.
+        raise SystemExit(
+            f"SCOUT returned no usable topics from {reply.tokens:,} tokens.\n"
+            f"Raw reply: {reply.text[:300]!r}\n"
+            f"Model was {SCOUT.model}. Reasoning-only models often emit no "
+            f"visible content for this task -- try CAIRN_SCOUT_MODEL=<instruct model>."
+        )
     console.print(f"  Hermes proposed [bold]{len(cands)}[/] topics "
                   f"([dim]{reply.tokens:,} tokens[/])")
     return cands

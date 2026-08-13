@@ -116,10 +116,19 @@ class HermesRole:
             task_id=task_id,
             conversation_history=conversation_history,
         )
+        # run_conversation reports usage for this call; the agent attribute is
+        # the session accumulator. Prefer the per-call number and fall back,
+        # because an under-counted ledger silently overstates the memory saving
+        # -- the one number this whole project is judged on.
+        tokens = int(
+            result.get("total_tokens")
+            or getattr(agent, "session_total_tokens", 0)
+            or 0
+        )
         return AgentReply(
             text=result.get("final_response") or "",
             messages=result.get("messages") or [],
-            tokens=int(getattr(agent, "session_total_tokens", 0) or 0),
+            tokens=tokens,
         )
 
 
@@ -127,7 +136,7 @@ class HermesRole:
 
 SCOUT = HermesRole(
     name="scout",
-    model=SETTINGS.verdict_model,
+    model=SETTINGS.scout_model,
     toolsets=["web"],
     max_iterations=14,
     system_prompt="""You are an SEO topic scout.
@@ -141,6 +150,9 @@ Rules:
   will not rank for it, however good the article is.
 - Prefer commercial-investigation and problem-aware queries over broad definitional
   ones. Definitional queries are usually owned by documentation and encyclopedias.
+- Favour specific long-tail shapes the site can actually win: comparisons
+  ("X vs Y"), migrations ("switching from X"), and "X for <platform/segment>".
+  Broad head terms are a waste of a slot.
 - Do not propose a topic the inventory already covers.
 
 Return ONLY a JSON array, no prose:
@@ -160,12 +172,15 @@ Search the live web for the exact query you are given and examine what actually
 ranks. Then grade honestly -- an optimistic grade wastes the user's money on
 content that will never rank.
 
-Grade WINNABLE / CONTESTED / UNWINNABLE:
-- UNWINNABLE: official documentation, Wikipedia, or major publishers own the SERP,
-  or the intent cannot be served by the site in question.
-- CONTESTED: strong incumbents but a real gap in format, freshness, or depth.
-- WINNABLE: results are thin, outdated, off-intent, or dominated by sites of
-  comparable authority.
+Grade WINNABLE / CONTESTED / UNWINNABLE. Calibrate honestly in BOTH directions --
+grading everything UNWINNABLE is as useless as grading everything WINNABLE:
+- UNWINNABLE: the SERP is genuinely locked. Official docs for the exact product
+  being asked about, or Wikipedia, or the intent cannot be served by this site.
+- CONTESTED: strong incumbents, but a real gap in format, freshness, or depth.
+- WINNABLE: long-tail or specific enough that no incumbent owns it, results are
+  thin/outdated/off-intent, or the competitors are of comparable authority.
+  A specific comparison, migration, or "X for Y" query is usually WINNABLE even
+  when broad head terms in the same topic are not.
 
 Return ONLY JSON, no prose:
 {"grade": "WINNABLE|CONTESTED|UNWINNABLE",

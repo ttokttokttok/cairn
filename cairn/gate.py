@@ -215,16 +215,30 @@ def evaluate(site: str, query: str) -> Decision:
         limit=3,
         projection={"query": 1, "grade": 1, "reason": 1},
     ):
-        if v["score"] >= SETTINGS.verdict_reuse_threshold and v.get("grade") in (
-            "UNWINNABLE",
-            "CONTESTED",
-        ):
+        if v["score"] < SETTINGS.verdict_reuse_threshold:
+            continue
+        if v.get("grade") in ("UNWINNABLE", "CONTESTED"):
             return Decision(
                 query=query,
                 passed=False,
                 reason=f"prior verdict {v['grade']}",
                 vetoed_by=f"verdicts:{v['_id']}",
                 evidence=f"'{v.get('query', '')}' — {v.get('reason', '')}",
+                score=v["score"],
+            )
+        # A WINNABLE verdict is not a reason to stop -- unless we already acted
+        # on it. Without this, every repeat run re-grades and re-briefs its own
+        # previous winners and quietly accumulates duplicate briefs.
+        brief = get_db().briefs.find_one(
+            {"site": site, "query": v.get("query")}, {"_id": 1, "status": 1}
+        )
+        if brief:
+            return Decision(
+                query=query,
+                passed=False,
+                reason=f"brief already written ({brief.get('status', '')})",
+                vetoed_by=f"briefs:{brief['_id']}",
+                evidence=f"'{v.get('query', '')}' — graded WINNABLE and briefed",
                 score=v["score"],
             )
 
