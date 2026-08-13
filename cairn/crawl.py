@@ -51,14 +51,21 @@ class CrawlResult:
     source: str = ""
 
 
+def strip_www(host: str) -> str:
+    # NB: str.lstrip("www.") strips *characters*, so it would turn
+    # "web.example.com" into "eb.example.com". Use removeprefix.
+    return host.lower().removeprefix("www.")
+
+
 def normalize_domain(domain: str) -> tuple[str, str]:
     """Return (bare_domain, root_url)."""
     d = domain.strip()
     if not d.startswith(("http://", "https://")):
         d = "https://" + d
     parsed = urlparse(d)
-    host = parsed.netloc or parsed.path
-    return host.lower().lstrip("www."), f"{parsed.scheme}://{host}"
+    host = (parsed.netloc or parsed.path).lower()
+    scheme = parsed.scheme or "https"
+    return strip_www(host), f"{scheme}://{host}"
 
 
 def _client() -> httpx.Client:
@@ -126,10 +133,10 @@ def collect_urls(root: str, max_pages: int) -> tuple[list[str], str]:
         if not urls:
             urls, source = _homepage_links(client, root), "homepage links"
 
-    host = urlparse(root).netloc
+    host = strip_www(urlparse(root).netloc)
     clean, seen = [], set()
     for u in urls:
-        if urlparse(u).netloc.lstrip("www.") != host.lstrip("www."):
+        if strip_www(urlparse(u).netloc) != host:
             continue
         u = u.split("#")[0].rstrip("/") or u
         if u in seen or _BORING.search(u):
