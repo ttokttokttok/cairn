@@ -1,0 +1,299 @@
+"""cairn — an SEO agent that gets cheaper every run."""
+
+from __future__ import annotations
+
+import typer
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+
+from . import store
+from .config import SETTINGS
+from .db import (
+    ensure_collections,
+    ensure_search_indexes,
+    get_db,
+    wait_for_search_indexes,
+)
+from .embed import active_backend
+
+app = typer.Typer(
+    add_completion=False,
+    help="An SEO agent that gets cheaper every run, because MongoDB remembers "
+    "what didn't work.",
+    no_args_is_help=True,
+)
+console = Console()
+
+
+@app.command()
+def init(
+    wait: bool = typer.Option(False, help="Block until vector indexes are queryable."),
+) -> None:
+    """Create collections and Atlas search indexes. Idempotent."""
+    created = ensure_collections()
+    console.print(
+        f"collections ready"
+        + (f" (created: {', '.join(created)})" if created else " (all existed)")
+    )
+    status = ensure_search_indexes()
+    table = Table(box=None, header_style="bold")
+    table.add_column("index")
+    table.add_column("status")
+    for name, state in status.items():
+        table.add_row(name, state)
+    console.print(table)
+    console.print(f"embedding backend: [bold]{active_backend()}[/]")
+    if wait:
+        with console.status("waiting for vector indexes to become queryable…"):
+            ok = wait_for_search_indexes()
+        console.print("indexes queryable" if ok else "[yellow]timed out — the gate "
+                      "will fall back to exact cosine scan[/]")
+
+
+@app.command()
+def run(
+    domain: str = typer.Argument(..., help="Any domain, e.g. example.com"),
+    resume: str = typer.Option(None, help="Resume a run by id."),
+    pages: int = typer.Option(None, help="Max pages to crawl."),
+    candidates: int = typer.Option(None, help="Candidate topics to propose."),
+) -> None:
+    """Run the pipeline against a domain."""
+    from .pipeline import run_pipeline
+
+    ensure_collections()
+    result = run_pipeline(
+        domain, resume_run_id=resume, max_pages=pages, candidates=candidates
+    )
+    console.print(
+        Panel.fit(
+            f"run [cyan]{result['runId']}[/] complete\n"
+            f"tokens spent this run: [bold]{result['tokens']:,}[/]\n\n"
+            f"[dim]cairn review {result['site']}   ·   cairn stats {result['site']}[/]",
+            border_style="green",
+        )
+    )
+
+
+@app.command()
+def review(domain: str) -> None:
+    """Approve or reject pending briefs. Rejections become memory."""
+    site, _ = _site(domain)
+    db = get_db()
+    pending = list(db.briefs.find({"site": site, "status": "pending_approval"}))
+    if not pending:
+        console.print("no briefs pending approval")
+        return
+
+    for doc in pending:
+        b = doc.get("brief", {})
+        body = "\n".join(
+            filter(
+                None,
+                [
+                    f"[bold]intent[/] {b.get('intent', '')}",
+                    f"[bold]why now[/] {b.get('why_now', '')}",
+                    f"[bold]angle[/] {b.get('angle', '')}",
+                    f"[bold]information gain[/] {b.get('information_gain', '')}",
+                    f"[bold]outline[/] " + " · ".join(b.get("outline", []) or []),
+                    f"[bold]internal links[/] "
+                    + ", ".join(
+                        f"{l.get('anchor', '')} → {l.get('url', '')}"
+                        for l in (b.get("internal_links") or [])
+                    ),
+                    f"[bold]do not cannibalize[/] {b.get('do_not_cannibalize', '')}",
+                ],
+            )
+        )
+        console.print(Panel(body, title=doc["query"], border_style="cyan"))
+        choice = typer.prompt("approve / reject / skip", default="skip")
+        if choice.startswith("a"):
+            db.briefs.update_one({"_id": doc["_id"]}, {"$set": {"status": "approved"}})
+        elif choice.startswith("r"):
+            why = typer.prompt("why? (this becomes a rule)")
+            db.briefs.update_one(
+                {"_id": doc["_id"]},
+                {"$set": {"status": "rejected", "humanFeedback": why}},
+            )
+
+
+@app.command()
+def stats(domain: str) -> None:
+    """The headline metric: tokens per accepted brief, run over run."""
+    site, _ = _site(domain)
+    db = get_db()
+    rows = list(
+        db.runs.aggregate(
+            [
+                {"$match": {"site": site}},
+                {"$sort": {"startedAt": 1}},
+                {
+                    "$lookup": {
+                        "from": "briefs",
+                        "localField": "runId",
+                        "foreignField": "runId",
+                        "as": "briefs",
+                    }
+                },
+                {
+                    "$lookup": {
+                        "from": "topics",
+                        "localField": "runId",
+                        "foreignField": "runId",
+                        "as": "topics",
+                    }
+                },
+                {
+                    "$project": {
+                        "runId": 1,
+                        "coldStart": 1,
+                        "tokens": 1,
+                        "tokensSavedByMemory": 1,
+                        "briefs": {"$size": "$briefs"},
+                        "considered": {"$size": "$topics"},
+                        "vetoed": {
+                            "$size": {
+                                "$filter": {
+                                    "input": "$topics",
+                                    "cond": {"$eq": ["$$this.status", "vetoed"]},
+                                }
+                            }
+                        },
+                    }
+                },
+            ]
+        )
+    )
+    if not rows:
+        console.print(f"no runs recorded for {site}")
+        return
+
+    table = Table(title=f"{site} — memory compounding", header_style="bold")
+    for col in ("run", "start", "considered", "vetoed by memory", "briefs",
+                "tokens", "tokens/brief"):
+        table.add_column(col)
+    for r in rows:
+        briefs = r.get("briefs", 0)
+        per = f"{r.get('tokens', 0) // briefs:,}" if briefs else "—"
+        table.add_row(
+            r["runId"][-8:],
+            "cold" if r.get("coldStart") else "warm",
+            str(r.get("considered", 0)),
+            str(r.get("vetoed", 0)),
+            str(briefs),
+            f"{r.get('tokens', 0):,}",
+            per,
+        )
+    console.print(table)
+
+    counts = {c: db[c].count_documents({"site": site}) for c in
+              ("pages", "verdicts", "rules", "briefs")}
+    console.print("memory: " + " · ".join(f"{k} [bold]{v}[/]" for k, v in counts.items()))
+
+
+@app.command()
+def memory(domain: str) -> None:
+    """Show what the system has learned about this site."""
+    site, _ = _site(domain)
+    db = get_db()
+
+    rules = list(db.rules.find({"site": site}).sort("confidence", -1))
+    if rules:
+        table = Table(title="learned rules", header_style="bold", show_lines=False)
+        table.add_column("rule", overflow="fold")
+        table.add_column("conf")
+        table.add_column("applied")
+        for r in rules:
+            table.add_row(
+                r.get("rule", ""),
+                f"{r.get('confidence', 0):.2f}",
+                str(r.get("timesApplied", 0)),
+            )
+        console.print(table)
+    else:
+        console.print("[dim]no rules learned yet[/]")
+
+    verdicts = list(db.verdicts.find({"site": site}).sort("observedAt", -1).limit(15))
+    if verdicts:
+        table = Table(title="recent SERP verdicts", header_style="bold")
+        table.add_column("grade")
+        table.add_column("query", overflow="fold")
+        table.add_column("reason", overflow="fold", style="dim")
+        for v in verdicts:
+            table.add_row(v.get("grade", ""), v.get("query", ""),
+                          (v.get("reason", "") or "")[:120])
+        console.print(table)
+
+
+@app.command()
+def reset(
+    domain: str,
+    yes: bool = typer.Option(False, "--yes", help="Skip confirmation."),
+) -> None:
+    """Wipe all memory for one site, to demo a cold start again."""
+    site, _ = _site(domain)
+    if not yes and not typer.confirm(f"Delete ALL cairn memory for {site}?"):
+        raise typer.Abort()
+    db = get_db()
+    deleted = {
+        c: db[c].delete_many({"site": site}).deleted_count
+        for c in ("sites", "pages", "topics", "verdicts", "rules", "briefs", "runs")
+    }
+    db.sites.delete_many({"domain": site})
+    console.print("deleted: " + " · ".join(f"{k}={v}" for k, v in deleted.items()))
+
+
+@app.command()
+def doctor() -> None:
+    """Check credentials and connectivity before a demo."""
+    import os
+
+    rows = [
+        ("MONGODB_URI", "set" if SETTINGS.mongodb_uri else "[red]MISSING[/]"),
+        (
+            "LLM key",
+            "set"
+            if any(
+                os.getenv(k)
+                for k in ("OPENROUTER_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY")
+            )
+            else "[red]MISSING[/]",
+        ),
+        ("embedding backend", active_backend()),
+        ("verdict model", SETTINGS.verdict_model),
+        ("brief model", SETTINGS.brief_model),
+    ]
+    try:
+        get_db().command("ping")
+        rows.append(("mongo ping", "[green]ok[/]"))
+        try:
+            get_db().client.admin.command("replSetGetStatus")
+            rows.append(("change streams", "[green]available[/]"))
+        except Exception:  # noqa: BLE001
+            rows.append(("change streams", "[yellow]unavailable — will poll[/]"))
+    except Exception as exc:  # noqa: BLE001
+        rows.append(("mongo ping", f"[red]{exc}[/]"))
+
+    try:
+        from run_agent import AIAgent  # noqa: F401
+
+        rows.append(("hermes", "[green]importable[/]"))
+    except Exception as exc:  # noqa: BLE001
+        rows.append(("hermes", f"[red]{exc}[/]"))
+
+    table = Table(box=None, header_style="bold")
+    table.add_column("check")
+    table.add_column("value")
+    for k, v in rows:
+        table.add_row(k, str(v))
+    console.print(table)
+
+
+def _site(domain: str) -> tuple[str, str]:
+    from .crawl import normalize_domain
+
+    return normalize_domain(domain)
+
+
+if __name__ == "__main__":
+    app()

@@ -1,0 +1,31 @@
+[project]
+name = "cairn"
+version = "0.1.0"
+description = "An SEO agent that gets cheaper every run, because MongoDB remembers what didn't work."
+readme = "README.md"
+# Upper bound inherited from hermes-agent, which caps at <3.14 because its
+# Rust-backed transitives have no cp314 wheels yet.
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "httpx>=0.28.1",
+    "lxml>=6.1.1",
+    "pymongo>=4.17.0",
+    "python-dotenv>=1.2.2",
+    # Pinned to match hermes-agent's exact pin; it refuses to resolve otherwise.
+    "rich==14.3.3",
+    "typer>=0.27.1",
+    "hermes-agent",
+]
+
+[project.scripts]
+cairn = "cairn.cli:app"
+
+[tool.uv.sources]
+hermes-agent = { path = "vendor/hermes-agent", editable = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["cairn"]

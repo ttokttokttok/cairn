@@ -1,0 +1,242 @@
+"""Persistence: memory writes, and run state / checkpoints.
+
+State and memory are kept apart on purpose. `runs` is state -- a cursor through
+the pipeline, disposable once the run finishes. Everything else is memory --
+cross-run, semantic, permanent.
+"""
+
+from __future__ import annotations
+
+import time
+import uuid
+from typing import Any
+
+from pymongo import UpdateOne
+
+from .crawl import CrawlResult
+from .db import get_db
+from .embed import active_backend, embed
+
+STAGES = [
+    "inventory",
+    "candidates",
+    "gate",
+    "verdicts",
+    "briefs",
+    "rules",
+    "done",
+]
+
+
+# --- memory ------------------------------------------------------------------
+
+
+def upsert_site(crawl: CrawlResult) -> None:
+    get_db().sites.update_one(
+        {"domain": crawl.domain},
+        {
+            "$set": {
+                "root": crawl.root,
+                "sitemapSource": crawl.source,
+                "lastCrawledAt": time.time(),
+            },
+            "$setOnInsert": {"firstSeenAt": time.time()},
+        },
+        upsert=True,
+    )
+
+
+def known_urls(site: str) -> set[str]:
+    return {d["url"] for d in get_db().pages.find({"site": site}, {"url": 1})}
+
+
+def store_pages(site: str, pages: list) -> int:
+    """Embed and upsert page inventory. Returns count written."""
+    if not pages:
+        return 0
+    vectors = embed([p.text_for_embedding() for p in pages], input_type="document")
+    ops = []
+    for page, vec in zip(pages, vectors):
+        ops.append(
+            UpdateOne(
+                {"site": site, "url": page.url},
+                {
+                    "$set": {
+                        "title": page.title,
+                        "h1": page.h1,
+                        "description": page.description,
+                        "summary": page.summary,
+                        "targetKeyword": page.target_keyword,
+                        "words": page.words,
+                        "embedding": vec,
+                        "embedBackend": active_backend(),
+                        "updatedAt": time.time(),
+                    }
+                },
+                upsert=True,
+            )
+        )
+    get_db().pages.bulk_write(ops, ordered=False)
+    return len(ops)
+
+
+def page_inventory(site: str, limit: int = 80) -> list[dict[str, Any]]:
+    return list(
+        get_db().pages.find(
+            {"site": site}, {"url": 1, "title": 1, "targetKeyword": 1, "_id": 0}
+        ).limit(limit)
+    )
+
+
+def store_verdict(site: str, run_id: str, query: str, verdict: dict[str, Any]) -> Any:
+    vec = embed([query], input_type="query")[0]
+    doc = {
+        "site": site,
+        "runId": run_id,
+        "query": query,
+        "grade": verdict.get("grade", "CONTESTED"),
+        "reason": verdict.get("reason", ""),
+        "intent": verdict.get("intent", ""),
+        "dominantFormat": verdict.get("dominant_format", ""),
+        "competitors": verdict.get("competitors", []),
+        "embedding": vec,
+        "observedAt": time.time(),
+    }
+    return get_db().verdicts.insert_one(doc).inserted_id
+
+
+def store_topic(site: str, run_id: str, decision, stage_cost: int = 0) -> None:
+    get_db().topics.insert_one(
+        {
+            "site": site,
+            "runId": run_id,
+            "query": decision.query,
+            "status": "passed" if decision.passed else "vetoed",
+            "vetoReason": decision.reason,
+            "vetoedBy": decision.vetoed_by,
+            "evidence": decision.evidence,
+            "score": decision.score,
+            "tokensSaved": stage_cost if not decision.passed else 0,
+            "createdAt": time.time(),
+        }
+    )
+
+
+def store_brief(site: str, run_id: str, query: str, brief: dict[str, Any]) -> Any:
+    return (
+        get_db()
+        .briefs.insert_one(
+            {
+                "site": site,
+                "runId": run_id,
+                "query": query,
+                "brief": brief,
+                "status": "pending_approval",
+                "createdAt": time.time(),
+            }
+        )
+        .inserted_id
+    )
+
+
+def store_rules(site: str, run_id: str, rules: list[dict[str, Any]]) -> int:
+    """Insert induced rules, reinforcing near-duplicates instead of duplicating.
+
+    Confidence is an atomic `$inc`, never an LLM output -- learning that lives in
+    the database is auditable and cannot hallucinate itself upward.
+    """
+    from .gate import knn
+
+    if not rules:
+        return 0
+    db = get_db()
+    written = 0
+    texts = [r.get("rule", "") for r in rules if r.get("rule")]
+    vectors = embed(texts, input_type="document")
+    for rule, vec in zip(rules, vectors):
+        near = knn("rules", site, vec, limit=1, projection={"rule": 1})
+        if near and near[0]["score"] >= 0.93:
+            db.rules.update_one(
+                {"_id": near[0]["_id"]},
+                {
+                    "$inc": {"confidence": 0.05, "timesConfirmed": 1},
+                    "$push": {"evidenceIds": run_id},
+                },
+            )
+            continue
+        db.rules.insert_one(
+            {
+                "site": site,
+                "rule": rule.get("rule", ""),
+                "confidence": min(float(rule.get("confidence", 0.6)), 0.95),
+                "evidence": rule.get("evidence", ""),
+                "evidenceIds": [run_id],
+                "timesApplied": 0,
+                "timesConfirmed": 1,
+                "embedding": vec,
+                "createdAt": time.time(),
+            }
+        )
+        written += 1
+    return written
+
+
+# --- run state / checkpoints -------------------------------------------------
+
+
+def new_run(site: str) -> str:
+    run_id = f"{site}-{uuid.uuid4().hex[:8]}"
+    get_db().runs.insert_one(
+        {
+            "runId": run_id,
+            "site": site,
+            "stage": "inventory",
+            "startedAt": time.time(),
+            "tokens": 0,
+            "tokensSavedByMemory": 0,
+            "coldStart": get_db().pages.count_documents({"site": site}) == 0,
+            "checkpoint": {},
+            "trajectories": {},
+        }
+    )
+    return run_id
+
+
+def get_run(run_id: str) -> dict[str, Any] | None:
+    return get_db().runs.find_one({"runId": run_id})
+
+
+def checkpoint(run_id: str, stage: str, data: dict[str, Any] | None = None) -> None:
+    update: dict[str, Any] = {"stage": stage, "updatedAt": time.time()}
+    for key, value in (data or {}).items():
+        update[f"checkpoint.{key}"] = value
+    get_db().runs.update_one({"runId": run_id}, {"$set": update})
+
+
+def save_trajectory(run_id: str, stage: str, messages: list[dict[str, Any]]) -> None:
+    """Persist a Hermes conversation so a resume continues mid-conversation.
+
+    Replayed via `conversation_history=` so the agent picks up with its reasoning
+    intact rather than restarting the stage from a cold prompt.
+    """
+    get_db().runs.update_one(
+        {"runId": run_id},
+        {"$set": {f"trajectories.{stage}": messages[-40:]}},
+    )
+
+
+def load_trajectory(run_id: str, stage: str) -> list[dict[str, Any]] | None:
+    run = get_run(run_id) or {}
+    return (run.get("trajectories") or {}).get(stage)
+
+
+def add_tokens(run_id: str, tokens: int, saved: int = 0) -> None:
+    get_db().runs.update_one(
+        {"runId": run_id},
+        {"$inc": {"tokens": tokens, "tokensSavedByMemory": saved}},
+    )
+
+
+def finish_run(run_id: str) -> None:
+    checkpoint(run_id, "done")
+    get_db().runs.update_one({"runId": run_id}, {"$set": {"finishedAt": time.time()}})
