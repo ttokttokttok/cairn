@@ -38,6 +38,7 @@ class Settings:
     dup_threshold: float
     verdict_reuse_threshold: float
     rule_match_threshold: float
+    rule_veto_enabled: bool
 
     candidates_per_run: int
     verdict_workers: int
@@ -77,6 +78,13 @@ def load_settings() -> Settings:
         dup_threshold=float(os.getenv("CAIRN_DUP_THRESHOLD", "0.80")),
         verdict_reuse_threshold=float(os.getenv("CAIRN_VERDICT_THRESHOLD", "0.82")),
         rule_match_threshold=float(os.getenv("CAIRN_RULE_THRESHOLD", "0.62")),
+        # Off by default, on evidence. Rule-to-query matching compares a category
+        # sentence against a short query and the margins do not separate:
+        # measured true positives scored 0.636-0.661, while a verified FALSE
+        # positive (a privacy/GDPR rule matching "umami vs fathom for agencies")
+        # scored 0.730 -- higher than any true positive. No threshold can split
+        # those, so rules steer SCOUT instead, where the same data is unambiguous.
+        rule_veto_enabled=os.getenv("CAIRN_RULE_VETO", "false").lower() == "true",
         candidates_per_run=int(os.getenv("CAIRN_CANDIDATES", "12")),
         verdict_workers=int(os.getenv("CAIRN_VERDICT_WORKERS", "4")),
         crawl_max_pages=int(os.getenv("CAIRN_MAX_PAGES", "60")),

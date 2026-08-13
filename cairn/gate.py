@@ -243,11 +243,31 @@ def evaluate(site: str, query: str) -> Decision:
             )
 
     # (c) does a learned rule forbid it?
-    for rule in knn(
-        "rules", site, query, limit=3, projection={"rule": 1, "confidence": 1}
-    ):
-        if rule["score"] >= SETTINGS.rule_match_threshold and (
-            rule.get("confidence", 0) >= 0.6
+    # Only the single best-matching rule gets a vote, and only if it says avoid.
+    #
+    # Scanning the top-N instead lets a weak, irrelevant `avoid` rule veto a topic
+    # that a stronger `prefer` rule endorses. Measured on umami.is, for the query
+    # "umami vs fathom for agencies": a privacy/GDPR avoid-rule scored 0.730 while
+    # the correct brand-comparison prefer-rule scored 0.709. Rule-to-query
+    # matching compares a category sentence against a short query, so the margins
+    # are genuinely thin -- this check is the least reliable of the three and is
+    # deliberately given the least power.
+    top_rules = (
+        knn(
+            "rules",
+            site,
+            query,
+            limit=1,
+            projection={"rule": 1, "confidence": 1, "polarity": 1},
+        )
+        if SETTINGS.rule_veto_enabled
+        else []
+    )
+    for rule in top_rules:
+        if (
+            rule.get("polarity") == "avoid"
+            and rule["score"] >= SETTINGS.rule_match_threshold
+            and rule.get("confidence", 0) >= 0.6
         ):
             return Decision(
                 query=query,

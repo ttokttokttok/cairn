@@ -254,9 +254,16 @@ A good rule is specific enough to act on and general enough to fire again:
   good  "Definitional 'what is X' queries lose to official docs for this site."
   bad   "The query about vector search was unwinnable."
 
+Every rule needs a polarity, and this matters -- `avoid` rules are used to VETO
+future topics before any API call, so a mislabelled rule silently kills good work:
+  "avoid"  -- topics matching this rule should NOT be pursued
+  "prefer" -- topics matching this rule are GOOD targets (recorded to steer
+              future scouting; never used to veto)
+
 Only state what the evidence supports. Two or three rules is a good run; zero is a
 valid answer if nothing generalizes.
 
 Return ONLY a JSON array, no prose:
-[{"rule": "...", "confidence": 0.0-1.0, "evidence": "what you saw that supports it"}]""",
+[{"rule": "...", "polarity": "avoid|prefer", "confidence": 0.0-1.0,
+  "evidence": "what you saw that supports it"}]""",
 )

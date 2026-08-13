@@ -179,6 +179,9 @@ def store_rules(site: str, run_id: str, rules: list[dict[str, Any]]) -> int:
         doc = {
             "site": site,
             "rule": text,
+            # Default to "prefer": a rule that fails to declare polarity must not
+            # silently gain the power to veto.
+            "polarity": "avoid" if rule.get("polarity") == "avoid" else "prefer",
             "confidence": min(float(rule.get("confidence", 0.6)), 0.95),
             "evidence": rule.get("evidence", ""),
             "evidenceIds": [run_id],

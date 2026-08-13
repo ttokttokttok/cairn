@@ -159,11 +159,36 @@ def _stage_candidates(
         f"- {p.get('title', '')} ({p.get('url', '')})" for p in inventory[:60]
     ) or "(no pages indexed — treat this as a brand-new site)"
 
+    # Feed learned rules into scouting. Rule-to-query vector matching is too
+    # noisy to veto on reliably, but as steering text it is unambiguous -- and it
+    # attacks the cost at its source, since a topic never proposed costs nothing
+    # to reject.
+    rules = list(
+        get_db().rules.find(
+            {"site": site, "confidence": {"$gte": 0.6}},
+            {"rule": 1, "polarity": 1, "_id": 0},
+        ).sort("confidence", -1).limit(12)
+    )
+    avoid = [r["rule"] for r in rules if r.get("polarity") == "avoid"]
+    prefer = [r["rule"] for r in rules if r.get("polarity") != "avoid"]
+    learned = ""
+    if avoid or prefer:
+        learned = "\n\nWhat previous runs learned about this site:\n"
+        learned += "".join(f"- AVOID: {r}\n" for r in avoid)
+        learned += "".join(f"- PREFER: {r}\n" for r in prefer)
+        learned += "Do not propose topics the AVOID rules describe.\n"
+
     prompt = (
         f"Site: {site}\n\n"
-        f"Existing content inventory ({len(inventory)} pages):\n{listing}\n\n"
+        f"Existing content inventory ({len(inventory)} pages):\n{listing}"
+        f"{learned}\n\n"
         f"Propose exactly {n} candidate topics for this site."
     )
+    if avoid or prefer:
+        console.print(
+            f"  [dim]steering scout with {len(avoid)} avoid / {len(prefer)} "
+            f"prefer rule(s) from memory[/]"
+        )
     with console.status(f"Hermes scouting {n} candidates…"):
         reply = SCOUT.run(prompt, task_id=f"{run_id}:candidates")
     meter.record(reply.tokens)
