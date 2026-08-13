@@ -204,7 +204,9 @@ def stats(domain: str) -> None:
     console.print(table)
     console.print(
         "[dim]`resolved from memory` rising is the system working: those "
-        "candidates cost zero API calls.[/]"
+        "candidates cost zero API calls.\n"
+        "token counts fall back to a ~4-chars-per-token estimate when the "
+        "provider returns no usage data.[/]"
     )
 
     counts = {c: db[c].count_documents({"site": site}) for c in

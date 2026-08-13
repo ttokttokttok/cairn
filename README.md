@@ -17,8 +17,8 @@ months ago.
 Cairn stores every SERP verdict, every duplicate collision, and every human rejection in MongoDB —
 then uses that memory to **veto work before paying for it**.
 
-> The same candidate topic costs **~2,000 tokens** to evaluate on run 1 and **~0 tokens** on run 2,
-> because the answer is already in MongoDB with its reasoning attached.
+> Measured on `plausible.io`: **22,359 tokens on run 1, 2,802 on run 2** — an 87% drop, with
+> **10 of 10** candidates resolved from memory and zero live SERP reads paid for.
 
 **This is the difference between RAG and memory.** A RAG app retrieves documents and stuffs them into
 a prompt. Cairn retrieves and then **refuses to run the next stage**. Retrieval output here is
@@ -83,29 +83,30 @@ flowchart LR
 
 A crash loses none of the run. Deleting the run loses none of the learning.
 
-### Five MongoDB capabilities, each load-bearing
+### Six MongoDB capabilities, each load-bearing
 
 | Capability | Collection | What it decides |
 |---|---|---|
+| **Automated Embedding** | all three vector indexes | `autoEmbed` — documents carry text, Atlas generates and maintains the vectors. No embedding pipeline, no second API key |
 | **Vector Search** ×3 | `pages`, `verdicts`, `rules` | Three separate indexes serving three *distinct* veto decisions |
 | **Atlas Search** | `pages` | The lexical half of cannibalization detection |
 | **Change Streams** | `verdicts` | Briefing starts the instant a winner lands, not when the batch ends |
 | **Atomic `$inc`** | `rules` | Confidence updates as a database write — auditable, can't hallucinate |
-| **Aggregation** | `runs ⋈ briefs ⋈ topics` | Tokens per accepted brief, run over run — the headline metric |
+| **Aggregation** | `runs ⋈ briefs ⋈ topics ⋈ verdicts` | Share of candidates resolved from memory, run over run — the headline metric |
 
-#### 1. Three vector indexes, three different jobs
+#### 1. Three vector indexes, three different jobs — embedded by Atlas itself
 
 Most projects have one vector index and call it memory. Ours has three because there are three
 genuinely different questions to ask before spending money:
 
 ```mermaid
 flowchart TB
-    Q["candidate topic<br/><i>'what is hybrid search'</i>"] --> E["embed once"]
+    Q["candidate topic<br/><i>'what is hybrid search'</i>"] --> E["Atlas embeds<br/>server-side"]
     E --> A & B & C
 
-    A["<b>a · pages</b><br/>vector + Atlas Search<br/>≥ 0.86"]
-    B["<b>b · verdicts</b><br/>vector<br/>≥ 0.90"]
-    C["<b>c · rules</b><br/>vector<br/>≥ 0.75 ∧ conf ≥ 0.6"]
+    A["<b>a · pages</b><br/>vector + Atlas Search<br/>≥ 0.80"]
+    B["<b>b · verdicts</b><br/>vector<br/>≥ 0.82"]
+    C["<b>c · rules</b><br/>vector<br/>≥ 0.62 ∧ conf ≥ 0.6"]
 
     A -->|hit| VA["✗ <i>we already cover this</i><br/>→ /blog/vector-search"]
     B -->|hit| VB["✗ <i>graded UNWINNABLE last run</i><br/>→ 'docs sites own this SERP'"]
@@ -178,15 +179,21 @@ Confidence is auditable, monotonic in evidence, and cannot inflate itself. Rules
 
 #### 5. One aggregation is the whole scoreboard
 
-`cairn stats` joins `runs` against `briefs` and `topics` to produce the number the project lives or
-dies on — **tokens per accepted brief, falling run over run.** Shape of the output:
+`cairn stats` joins `runs` against `briefs`, `topics`, and `verdicts`. Real output from two
+consecutive runs against `plausible.io`:
 
-| run | start | considered | vetoed by memory | briefs | tokens | tokens/brief |
-|---|---|---|---|---|---|---|
-| `a1b2c3d4` | cold | 12 | 0 | 3 | … | … |
-| `e5f6g7h8` | warm | 12 | 7 | 3 | … | … |
+| run | start | considered | resolved from memory | paid SERP reads | tokens |
+|---|---|---|---|---|---|
+| `0eaaf51a` | cold | 10 | 9/10 (90%) | 1 | 22,359 |
+| `659b6998` | warm | 10 | **10/10 (100%)** | **0** | **2,802** |
 
-The `vetoed by memory` column going up while `tokens/brief` goes down *is* the project working.
+Note what this deliberately does *not* report: **tokens per brief.** As memory saturates a run
+correctly produces fewer briefs, because less is genuinely new — so that ratio *rises* while the
+system is working. We measured it going 9,358 → 30,370 across four runs and cut the metric. The
+honest measure is the share of candidates answered with zero API calls.
+
+Even on the cold run, 9 of 10 candidates were vetoed: the crawl populates `pages` before the gate
+runs, so cannibalization detection pays for itself on run 1.
 
 ---
 
@@ -295,7 +302,7 @@ uv run cairn run example.com                     # full pipeline
 uv run cairn run example.com --resume <run_id>   # continue after a crash
 uv run cairn review example.com                  # approve/reject; rejections become rules
 uv run cairn memory example.com                  # what the system has learned
-uv run cairn stats example.com                   # tokens per brief, run over run
+uv run cairn stats example.com                   # share resolved from memory, run over run
 uv run cairn reset example.com                   # wipe memory, to demo a cold start again
 ```
 
@@ -305,13 +312,15 @@ Nothing hard-blocks on a missing optional dependency:
 
 | Missing | Fallback | Cost |
 |---|---|---|
-| Atlas vector index still building | Exact cosine scan in `_exact_knn` | Milliseconds at these corpus sizes |
-| `VOYAGE_API_KEY` | Deterministic hashed bag-of-words | **Lexical similarity only** — measured 0.507 on a near-duplicate pair against a 0.86 threshold, so semantic dedupe won't fire. Fine for a smoke test, not for a real run. |
+| Atlas vector index still building | Loud warning; exact cosine scan when embeddings are client-side | With `autoEmbed` there are no stored vectors to scan, so the gate reports that it is running blind rather than returning zero matches |
+| M10+ cluster for `autoEmbed` | `CAIRN_EMBED_BACKEND=voyage` (client-side) or `hash` | `hash` is lexical only — measured 0.507 on a near-duplicate pair, below any useful threshold |
+| Provider usage data | ~4-chars-per-token estimate, shown with a `~` prefix | OpenRouter usage reporting is provider-dependent and returned nothing on many calls; reporting 0 would have made the memory saving look infinite |
 | Change streams | Polling the `verdicts` collection | ~1s added latency |
 | Atlas Search index | Vector half of the gate still runs | Loses literal-keyword collision detection |
 
-The vector-index fallback matters more than it looks: silently returning zero matches would read as
-*"no duplicates found"*, which is the most dangerous possible failure mode for this system.
+The vector-index case matters more than it looks: silently returning zero matches would read as
+*"no duplicates found"*, the most dangerous possible failure mode for this system. That is why it
+warns instead of degrading quietly.
 
 ## License
 

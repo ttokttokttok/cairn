@@ -180,8 +180,9 @@ def _stage_candidates(
             f"Model was {SCOUT.model}. Reasoning-only models often emit no "
             f"visible content for this task -- try CAIRN_SCOUT_MODEL=<instruct model>."
         )
+    mark = "~" if reply.estimated else ""
     console.print(f"  Hermes proposed [bold]{len(cands)}[/] topics "
-                  f"([dim]{reply.tokens:,} tokens[/])")
+                  f"([dim]{mark}{reply.tokens:,} tokens[/])")
     return cands
 
 

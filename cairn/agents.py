@@ -37,11 +37,30 @@ def require_llm_key() -> None:
         )
 
 
+def estimate_tokens(messages: list[dict[str, Any]], text: str) -> int:
+    """Rough token count from message text, ~4 chars per token.
+
+    Needed because OpenRouter usage reporting is provider-dependent: the same
+    model and parameters return real usage on one routing and nothing on the
+    next. Reporting 0 in that case would make the memory saving look infinite,
+    so we estimate and label it rather than publish a number we didn't measure.
+    """
+    chars = len(text or "")
+    for m in messages or []:
+        content = m.get("content")
+        if isinstance(content, str):
+            chars += len(content)
+        elif isinstance(content, list):  # tool-call blocks
+            chars += sum(len(str(part)) for part in content)
+    return chars // 4
+
+
 @dataclass
 class AgentReply:
     text: str
     messages: list[dict[str, Any]] = field(default_factory=list)
     tokens: int = 0
+    estimated: bool = False
 
     def json(self, default: Any = None) -> Any:
         """Pull the first JSON value out of the reply.
@@ -97,7 +116,11 @@ class HermesRole:
             skip_memory=True,
             skip_context_files=True,
             skip_background_review=True,
-            save_trajectories=False,
+            # `save_trajectories` is deliberately NOT passed. Supplying it at
+            # all -- True or False -- makes Hermes report total_tokens=0 and
+            # session_total_tokens=0 for the whole call, which silently zeroes
+            # the token ledger this project is measured on. Verified against
+            # hermes-agent 0.20.0: omitted=1289 tokens, False=0, True=0.
         )
         if self.toolsets:
             kwargs["enabled_toolsets"] = self.toolsets
@@ -120,15 +143,18 @@ class HermesRole:
         # the session accumulator. Prefer the per-call number and fall back,
         # because an under-counted ledger silently overstates the memory saving
         # -- the one number this whole project is judged on.
+        text = result.get("final_response") or ""
+        messages = result.get("messages") or []
         tokens = int(
             result.get("total_tokens")
             or getattr(agent, "session_total_tokens", 0)
             or 0
         )
+        estimated = tokens == 0
+        if estimated:
+            tokens = estimate_tokens(messages, text)
         return AgentReply(
-            text=result.get("final_response") or "",
-            messages=result.get("messages") or [],
-            tokens=tokens,
+            text=text, messages=messages, tokens=tokens, estimated=estimated
         )
 
 
