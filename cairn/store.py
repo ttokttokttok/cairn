@@ -15,7 +15,7 @@ from pymongo import UpdateOne
 
 from .crawl import CrawlResult
 from .db import get_db
-from .embed import active_backend, embed
+from .embed import active_backend, embed, uses_atlas_autoembed
 
 STAGES = [
     "inventory",
@@ -51,30 +51,36 @@ def known_urls(site: str) -> set[str]:
 
 
 def store_pages(site: str, pages: list) -> int:
-    """Embed and upsert page inventory. Returns count written."""
+    """Upsert page inventory. Returns count written.
+
+    Under autoEmbed we write only `embedText` and Atlas maintains the vector.
+    Otherwise we embed client-side and store the vector alongside.
+    """
     if not pages:
         return 0
-    vectors = embed([p.text_for_embedding() for p in pages], input_type="document")
+    texts = [p.text_for_embedding() for p in pages]
+    vectors = (
+        [None] * len(pages)
+        if uses_atlas_autoembed()
+        else embed(texts, input_type="document")
+    )
     ops = []
-    for page, vec in zip(pages, vectors):
+    for page, text, vec in zip(pages, texts, vectors):
+        fields = {
+            "title": page.title,
+            "h1": page.h1,
+            "description": page.description,
+            "summary": page.summary,
+            "targetKeyword": page.target_keyword,
+            "words": page.words,
+            "embedText": text,
+            "embedBackend": active_backend(),
+            "updatedAt": time.time(),
+        }
+        if vec is not None:
+            fields["embedding"] = vec
         ops.append(
-            UpdateOne(
-                {"site": site, "url": page.url},
-                {
-                    "$set": {
-                        "title": page.title,
-                        "h1": page.h1,
-                        "description": page.description,
-                        "summary": page.summary,
-                        "targetKeyword": page.target_keyword,
-                        "words": page.words,
-                        "embedding": vec,
-                        "embedBackend": active_backend(),
-                        "updatedAt": time.time(),
-                    }
-                },
-                upsert=True,
-            )
+            UpdateOne({"site": site, "url": page.url}, {"$set": fields}, upsert=True)
         )
     get_db().pages.bulk_write(ops, ordered=False)
     return len(ops)
@@ -89,7 +95,7 @@ def page_inventory(site: str, limit: int = 80) -> list[dict[str, Any]]:
 
 
 def store_verdict(site: str, run_id: str, query: str, verdict: dict[str, Any]) -> Any:
-    vec = embed([query], input_type="query")[0]
+    # `query` is itself the indexed text under autoEmbed, so nothing extra to add.
     doc = {
         "site": site,
         "runId": run_id,
@@ -99,9 +105,10 @@ def store_verdict(site: str, run_id: str, query: str, verdict: dict[str, Any]) -
         "intent": verdict.get("intent", ""),
         "dominantFormat": verdict.get("dominant_format", ""),
         "competitors": verdict.get("competitors", []),
-        "embedding": vec,
         "observedAt": time.time(),
     }
+    if not uses_atlas_autoembed():
+        doc["embedding"] = embed([query], input_type="query")[0]
     return get_db().verdicts.insert_one(doc).inserted_id
 
 
@@ -147,14 +154,19 @@ def store_rules(site: str, run_id: str, rules: list[dict[str, Any]]) -> int:
     """
     from .gate import knn
 
+    rules = [r for r in rules if r.get("rule")]
     if not rules:
         return 0
     db = get_db()
     written = 0
-    texts = [r.get("rule", "") for r in rules if r.get("rule")]
-    vectors = embed(texts, input_type="document")
-    for rule, vec in zip(rules, vectors):
-        near = knn("rules", site, vec, limit=1, projection={"rule": 1})
+    texts = [r["rule"] for r in rules]
+    vectors = (
+        [None] * len(rules)
+        if uses_atlas_autoembed()
+        else embed(texts, input_type="document")
+    )
+    for rule, text, vec in zip(rules, texts, vectors):
+        near = knn("rules", site, text, limit=1, projection={"rule": 1})
         if near and near[0]["score"] >= 0.93:
             db.rules.update_one(
                 {"_id": near[0]["_id"]},
@@ -164,19 +176,19 @@ def store_rules(site: str, run_id: str, rules: list[dict[str, Any]]) -> int:
                 },
             )
             continue
-        db.rules.insert_one(
-            {
-                "site": site,
-                "rule": rule.get("rule", ""),
-                "confidence": min(float(rule.get("confidence", 0.6)), 0.95),
-                "evidence": rule.get("evidence", ""),
-                "evidenceIds": [run_id],
-                "timesApplied": 0,
-                "timesConfirmed": 1,
-                "embedding": vec,
-                "createdAt": time.time(),
-            }
-        )
+        doc = {
+            "site": site,
+            "rule": text,
+            "confidence": min(float(rule.get("confidence", 0.6)), 0.95),
+            "evidence": rule.get("evidence", ""),
+            "evidenceIds": [run_id],
+            "timesApplied": 0,
+            "timesConfirmed": 1,
+            "createdAt": time.time(),
+        }
+        if vec is not None:
+            doc["embedding"] = vec
+        db.rules.insert_one(doc)
         written += 1
     return written
 

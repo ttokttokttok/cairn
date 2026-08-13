@@ -29,6 +29,19 @@ def active_backend() -> str:
     return "voyage" if SETTINGS.voyage_api_key else "hash"
 
 
+def uses_atlas_autoembed() -> bool:
+    """True when Atlas generates the vectors server-side.
+
+    In this mode we never compute, store, or send an embedding: documents carry
+    the source text, and $vectorSearch takes `query` text plus a `model`.
+    """
+    return active_backend() == "atlas"
+
+
+# The field on each collection that Atlas embeds when autoEmbed is on.
+AUTOEMBED_PATH = {"pages": "embedText", "verdicts": "query", "rules": "rule"}
+
+
 def embed(texts: list[str], input_type: str = "document") -> list[list[float]]:
     """Embed a batch. `input_type` is "document" or "query"."""
     if not texts:

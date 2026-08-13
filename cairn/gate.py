@@ -20,8 +20,8 @@ from typing import Any
 from pymongo.errors import OperationFailure
 
 from .config import SETTINGS
-from .db import get_db
-from .embed import cosine, embed_one
+from .db import INDEX_NAMES, get_db
+from .embed import AUTOEMBED_PATH, cosine, embed_one, uses_atlas_autoembed
 
 
 @dataclass
@@ -38,47 +38,84 @@ class Decision:
         return self.vetoed_by.split(":")[0] if self.vetoed_by else ""
 
 
+_WARNED: set[str] = set()
+
+
 def knn(
     collection: str,
     site: str,
-    vector: list[float],
+    text: str,
     limit: int = 5,
     projection: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Vector search with an exact-cosine fallback.
+    """Semantic search over one memory collection, keyed by query *text*.
 
-    Atlas search indexes build asynchronously, and a brand-new cluster can be
-    queryable for writes long before `pages_vec` is ready. At hackathon corpus
-    sizes an exact scan is milliseconds, so falling back keeps the gate honest
-    instead of silently returning zero matches (which would look like "no
-    duplicates found" -- the most dangerous possible failure mode here).
+    With Atlas Automated Embedding the vectors never leave the server: we pass
+    `query` text and a `model`, and Atlas embeds both sides. With a client-side
+    backend we embed here and fall back to an exact cosine scan if the index is
+    still building -- at hackathon corpus sizes that is milliseconds, and it
+    keeps the gate honest rather than silently returning zero matches, which
+    would read as "no duplicates found": the most dangerous failure mode here.
     """
     db = get_db()
-    index = {"pages": "pages_vec", "verdicts": "verdicts_vec", "rules": "rules_vec"}[
-        collection
-    ]
-    pipeline = [
-        {
-            "$vectorSearch": {
-                "index": index,
-                "path": "embedding",
-                "queryVector": vector,
-                "numCandidates": max(limit * 20, 100),
-                "limit": limit,
-                "filter": {"site": site},
-            }
-        },
-        {"$set": {"score": {"$meta": "vectorSearchScore"}}},
-    ]
-    if projection:
-        pipeline.append({"$project": {**projection, "score": 1}})
+    index = INDEX_NAMES[collection]
+
+    if uses_atlas_autoembed():
+        stage = {
+            "index": index,
+            "path": AUTOEMBED_PATH[collection],
+            "query": text,
+            "model": SETTINGS.autoembed_model,
+            # Required even under autoEmbed: the embedding is server-side but the
+            # search is still ANN.
+            "numCandidates": max(limit * 20, 100),
+            "limit": limit,
+            "filter": {"site": site},
+        }
+        try:
+            return _run(collection, stage, projection)
+        except OperationFailure as exc:
+            # No exact-scan fallback exists here: with autoEmbed there are no
+            # stored vectors to scan. Fail loudly instead of pretending the
+            # memory is empty.
+            if collection not in _WARNED:
+                _WARNED.add(collection)
+                print(
+                    f"  ! vector search on `{collection}` failed: "
+                    f"{str(exc)[:120]}\n"
+                    f"    the memory gate is running BLIND on this collection. "
+                    f"Run `cairn init --wait`."
+                )
+            return []
+
+    vector = embed_one(text, input_type="query")
+    stage = {
+        "index": index,
+        "path": "embedding",
+        "queryVector": vector,
+        "numCandidates": max(limit * 20, 100),
+        "limit": limit,
+        "filter": {"site": site},
+    }
     try:
-        hits = list(db[collection].aggregate(pipeline))
+        hits = _run(collection, stage, projection)
         if hits:
             return hits
     except OperationFailure:
         pass
     return _exact_knn(collection, site, vector, limit, projection)
+
+
+def _run(
+    collection: str, stage: dict[str, Any], projection: dict[str, Any] | None
+) -> list[dict[str, Any]]:
+    pipeline: list[dict[str, Any]] = [
+        {"$vectorSearch": stage},
+        {"$set": {"score": {"$meta": "vectorSearchScore"}}},
+    ]
+    if projection:
+        pipeline.append({"$project": {**projection, "score": 1}})
+    return list(get_db()[collection].aggregate(pipeline))
 
 
 def _exact_knn(
@@ -141,11 +178,13 @@ def keyword_hits(site: str, query: str, limit: int = 3) -> list[dict[str, Any]]:
 
 
 def evaluate(site: str, query: str) -> Decision:
-    """Run one candidate through all three memory checks. No API calls."""
-    vec = embed_one(query, input_type="query")
+    """Run one candidate through all three memory checks.
 
+    No LLM calls and no web calls -- the whole point is that this is the cheap
+    path. With autoEmbed the embedding happens inside the database.
+    """
     # (a) do we already cover this intent?
-    for page in knn("pages", site, vec, limit=3, projection={"url": 1, "title": 1}):
+    for page in knn("pages", site, query, limit=3, projection={"url": 1, "title": 1}):
         if page["score"] >= SETTINGS.dup_threshold:
             return Decision(
                 query=query,
@@ -172,7 +211,7 @@ def evaluate(site: str, query: str) -> Decision:
     for v in knn(
         "verdicts",
         site,
-        vec,
+        query,
         limit=3,
         projection={"query": 1, "grade": 1, "reason": 1},
     ):
@@ -191,7 +230,7 @@ def evaluate(site: str, query: str) -> Decision:
 
     # (c) does a learned rule forbid it?
     for rule in knn(
-        "rules", site, vec, limit=3, projection={"rule": 1, "confidence": 1}
+        "rules", site, query, limit=3, projection={"rule": 1, "confidence": 1}
     ):
         if rule["score"] >= SETTINGS.rule_match_threshold and (
             rule.get("confidence", 0) >= 0.6

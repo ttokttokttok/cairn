@@ -17,6 +17,7 @@ from pymongo.database import Database
 from pymongo.errors import OperationFailure
 
 from .config import SETTINGS
+from .embed import AUTOEMBED_PATH, uses_atlas_autoembed
 
 _client: MongoClient | None = None
 
@@ -36,49 +37,34 @@ def get_db() -> Database:
 # --- vector index definitions ------------------------------------------------
 # Three vector indexes, each serving a distinct veto decision in the memory gate.
 
+INDEX_NAMES = {"pages": "pages_vec", "verdicts": "verdicts_vec", "rules": "rules_vec"}
+
+
+def _vector_field(collection: str) -> dict[str, Any]:
+    """autoEmbed when Atlas owns the embeddings, a plain vector field otherwise."""
+    if uses_atlas_autoembed():
+        return {
+            "type": "autoEmbed",
+            "modality": "text",
+            "path": AUTOEMBED_PATH[collection],
+            "model": SETTINGS.autoembed_model,
+        }
+    return {
+        "type": "vector",
+        "path": "embedding",
+        "numDimensions": SETTINGS.embed_dims,
+        "similarity": "cosine",
+    }
+
+
 VECTOR_INDEXES: dict[str, dict[str, Any]] = {
-    "pages": {
-        "name": "pages_vec",
+    coll: {
+        "name": name,
         "definition": {
-            "fields": [
-                {
-                    "type": "vector",
-                    "path": "embedding",
-                    "numDimensions": SETTINGS.embed_dims,
-                    "similarity": "cosine",
-                },
-                {"type": "filter", "path": "site"},
-            ]
+            "fields": [_vector_field(coll), {"type": "filter", "path": "site"}]
         },
-    },
-    "verdicts": {
-        "name": "verdicts_vec",
-        "definition": {
-            "fields": [
-                {
-                    "type": "vector",
-                    "path": "embedding",
-                    "numDimensions": SETTINGS.embed_dims,
-                    "similarity": "cosine",
-                },
-                {"type": "filter", "path": "site"},
-            ]
-        },
-    },
-    "rules": {
-        "name": "rules_vec",
-        "definition": {
-            "fields": [
-                {
-                    "type": "vector",
-                    "path": "embedding",
-                    "numDimensions": SETTINGS.embed_dims,
-                    "similarity": "cosine",
-                },
-                {"type": "filter", "path": "site"},
-            ]
-        },
-    },
+    }
+    for coll, name in INDEX_NAMES.items()
 }
 
 # Atlas Search sits alongside the vector index on `pages`. Cannibalization is a

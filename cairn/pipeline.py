@@ -335,13 +335,11 @@ def _grade_one(site: str, run_id: str, cand: dict) -> tuple[dict, int]:
 
 
 def _write_brief(site: str, run_id: str, verdict: dict, meter: TokenMeter) -> None:
-    from .embed import embed_one
     from .gate import knn
 
     query = verdict["query"]
     # Internal link targets come out of the database, so they cannot be invented.
-    vec = embed_one(query, input_type="query")
-    links = knn("pages", site, vec, limit=6, projection={"url": 1, "title": 1})
+    links = knn("pages", site, query, limit=6, projection={"url": 1, "title": 1})
     link_list = "\n".join(
         f"- {p.get('url')} — {p.get('title', '')}" for p in links
     ) or "(no internal pages indexed)"
