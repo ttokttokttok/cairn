@@ -126,6 +126,12 @@ and either signal alone misses half the cases:
 - **Atlas Search** catches *literal keyword collision* on `targetKeyword`, which a semantic model
   often scores as merely similar rather than identical
 
+It searches `targetKeyword` **only**, and that restriction is load-bearing. Including `title` and
+`h1` let a long query pile up common-token matches: `"bounce rate removed in GA4 what to use
+instead"` scored **6.08** against an unrelated post, *above* the genuine collision
+`"plausible vs matomo"` → `/vs-matomo` at **5.65**. No threshold separates those. Restricted to
+`targetKeyword` the same pair splits cleanly at 2.34 vs 3.07.
+
 ```python
 # gate.py — the lexical half, fuzzy so near-miss keyword targets still collide
 {"$search": {
@@ -333,8 +339,12 @@ uv run cairn init --wait  # create collections and Atlas search indexes
 ```bash
 uv run cairn run example.com                     # full pipeline
 uv run cairn run example.com --resume <run_id>   # continue after a crash
+
+# Seeing what the agent produced and why
+uv run cairn report example.com                  # ← standalone HTML: decisions, evidence, briefs
+uv run cairn briefs example.com --full           # read the briefs in the terminal
 uv run cairn review example.com                  # approve/reject; rejections become rules
-uv run cairn memory example.com                  # what the system has learned
+uv run cairn memory example.com                  # rules and SERP verdicts it has stored
 uv run cairn stats example.com                   # share resolved from memory, run over run
 uv run cairn reset example.com                   # wipe memory, to demo a cold start again
 ```

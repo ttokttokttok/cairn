@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>plausible.io — cairn</title><style>
+:root{--ground:#EAEBE7;--surface:#F4F5F2;--surface-2:#DEE0DA;--ink:#1B2024;
+--ink-soft:#4C555C;--ink-faint:#79838B;--rule:#C9CDC5;--rule-soft:#D8DBD4;
+--lichen:#6F7C31;--lichen-bg:#E4E7D2;--veto:#9E4A32;--veto-bg:#F0DED8;
+--paid:#9A6A1F;--paid-bg:#F2E4CC;--pass:#3E6B52;--pass-bg:#D8E5DC;
+--mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
+--sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+--ground:#14171A;--surface:#1B1F23;--surface-2:#262B30;--ink:#E8EAE5;
+--ink-soft:#A9B2B8;--ink-faint:#77828A;--rule:#313940;--rule-soft:#262D33;
+--lichen:#B4C35C;--lichen-bg:#2C331A;--veto:#DB8A72;--veto-bg:#38211A;
+--paid:#D6A55B;--paid-bg:#362A16;--pass:#7FB795;--pass-bg:#1C2E24}}
+:root[data-theme="dark"]{--ground:#14171A;--surface:#1B1F23;--surface-2:#262B30;
+--ink:#E8EAE5;--ink-soft:#A9B2B8;--ink-faint:#77828A;--rule:#313940;
+--rule-soft:#262D33;--lichen:#B4C35C;--lichen-bg:#2C331A;--veto:#DB8A72;
+--veto-bg:#38211A;--paid:#D6A55B;--paid-bg:#362A16;--pass:#7FB795;--pass-bg:#1C2E24}
+*{box-sizing:border-box}
+body{background:var(--ground);color:var(--ink);font-family:var(--sans);
+line-height:1.6;margin:0;padding:0 1.25rem 5rem;-webkit-font-smoothing:antialiased}
+.wrap{max-width:58rem;margin:0 auto}
+header{padding:3.5rem 0 2rem;border-bottom:2px solid var(--ink)}
+h1{font-family:var(--mono);font-size:clamp(2rem,5vw,3rem);letter-spacing:-.04em;
+margin:0;line-height:1}
+h1 .dot{color:var(--lichen)}
+.sub{color:var(--ink-soft);margin:.9rem 0 0}
+.stamp{display:flex;flex-wrap:wrap;gap:.4rem 1.4rem;margin-top:1.4rem;
+font-family:var(--mono);font-size:.72rem;letter-spacing:.06em;
+text-transform:uppercase;color:var(--ink-faint)}
+section{padding-top:3rem}
+h2{font-family:var(--mono);font-size:1rem;margin:0 0 .3rem;letter-spacing:-.01em}
+.lede{color:var(--ink-soft);margin:0 0 1.3rem;max-width:68ch}
+h3{font-family:var(--mono);font-size:.8rem;letter-spacing:.04em;
+text-transform:uppercase;color:var(--ink-faint);margin:2rem 0 .7rem}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(9rem,1fr));gap:.7rem}
+.kpi{background:var(--surface);border:1px solid var(--rule);border-radius:3px;
+padding:.9rem 1rem}
+.kpi b{display:block;font-family:var(--mono);font-size:1.6rem;
+font-variant-numeric:tabular-nums;letter-spacing:-.03em}
+.kpi span{font-size:.74rem;letter-spacing:.05em;text-transform:uppercase;
+color:var(--ink-faint);font-family:var(--mono)}
+.scroller{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:.86rem;min-width:44rem;
+table-layout:fixed}
+table.gate col.c-topic{width:26%}
+table.gate col.c-out{width:19%}
+table.gate col.c-ev{width:47%}
+table.gate col.c-sc{width:8%}
+table.verdicts col.c-grade{width:13%}
+table.verdicts col.c-q{width:32%}
+td{overflow-wrap:anywhere}
+th{text-align:left;font-family:var(--mono);font-size:.68rem;letter-spacing:.07em;
+text-transform:uppercase;color:var(--ink-faint);padding:0 .65rem .5rem;
+border-bottom:1px solid var(--rule)}
+td{padding:.58rem .65rem;border-bottom:1px solid var(--rule-soft);vertical-align:top}
+tbody tr:last-child td{border-bottom:none}
+td.sc{font-family:var(--mono);font-variant-numeric:tabular-nums;
+color:var(--ink-faint);text-align:right;white-space:nowrap}
+td.ev{color:var(--ink-faint);font-size:.81rem}
+.tag{display:inline-block;font-family:var(--mono);font-size:.66rem;
+letter-spacing:.05em;text-transform:uppercase;padding:.16rem .42rem;
+border-radius:2px;max-width:100%;overflow-wrap:anywhere}
+.t-pages{background:var(--veto-bg);color:var(--veto)}
+.t-verdicts{background:var(--paid-bg);color:var(--paid)}
+.t-briefs{background:var(--lichen-bg);color:var(--lichen)}
+.t-rules{background:var(--lichen-bg);color:var(--lichen)}
+.t-pass{background:var(--pass-bg);color:var(--pass)}
+.t-WINNABLE{background:var(--pass-bg);color:var(--pass)}
+.t-CONTESTED{background:var(--paid-bg);color:var(--paid)}
+.t-UNWINNABLE{background:var(--veto-bg);color:var(--veto)}
+.brief{background:var(--surface);border:1px solid var(--rule);border-radius:3px;
+padding:1.4rem 1.5rem;margin-bottom:1rem}
+.brief h4{font-size:1.08rem;margin:0 0 .2rem;text-wrap:balance}
+.brief .meta{font-family:var(--mono);font-size:.72rem;letter-spacing:.05em;
+text-transform:uppercase;color:var(--ink-faint);margin-bottom:1rem;
+display:flex;flex-wrap:wrap;gap:.4rem .9rem;align-items:center}
+.field{margin:.9rem 0}
+.field .k{font-family:var(--mono);font-size:.7rem;letter-spacing:.07em;
+text-transform:uppercase;color:var(--ink-faint);margin-bottom:.2rem}
+.field .v{color:var(--ink-soft);font-size:.92rem}
+ol.outline{margin:.3rem 0 0;padding-left:1.3rem;color:var(--ink-soft);font-size:.9rem}
+ol.outline li{margin:.22rem 0}
+ul.plain{margin:.3rem 0 0;padding-left:1.1rem;color:var(--ink-soft);font-size:.9rem}
+.empty{color:var(--ink-faint);font-style:italic;font-size:.9rem}
+.note{background:var(--surface);border-left:3px solid var(--lichen);
+padding:.85rem 1.05rem;margin:1.2rem 0;font-size:.92rem;color:var(--ink-soft)}
+footer{margin-top:4rem;padding-top:1.3rem;border-top:1px solid var(--rule);
+font-family:var(--mono);font-size:.72rem;letter-spacing:.05em;
+text-transform:uppercase;color:var(--ink-faint)}
+</style></head><body>
+<div class="wrap">
+<header>
+  <h1>cairn<span class="dot">.</span></h1>
+  <p class="sub">What the agent decided for <strong>plausible.io</strong>, and why.</p>
+  <div class="stamp">
+    <span>plausible.io</span>
+    <span>2 run(s)</span>
+    <span>13 Aug 2026, 15:04</span>
+  </div>
+</header>
+
+<section>
+  <h2>Latest run</h2>
+  <p class="lede">The agent proposes topics, then checks its own memory before spending
+  anything. Only what survives reaches a live search.</p>
+  <div class="kpis">
+    <div class="kpi"><b>10</b><span>considered</span></div>
+    <div class="kpi"><b>10</b><span>stopped by memory</span></div>
+    <div class="kpi"><b>0</b><span>searched live</span></div>
+    <div class="kpi"><b>2,802</b><span>tokens</span></div>
+  </div>
+  <div class="note">Anything stopped by memory cost <strong>nothing</strong> —
+  no model call, no web request. The evidence column names the exact record that stopped it.</div>
+  <div class="scroller"><table class="gate">
+    <colgroup><col class="c-topic"><col class="c-out"><col class="c-ev"><col class="c-sc"></colgroup>
+    <thead><tr><th>Topic the agent considered</th><th>Outcome</th><th>Evidence</th><th style="text-align:right">Score</th></tr></thead>
+    <tbody><tr><td>plausible analytics vs fathom analytics</td><td><span class="tag t-pages">already covered</span></td><td class="ev">https://plausible.io/vs-matomo — Plausible vs Matomo: A simple, privacy-first alternative | Plausible Analytics</td><td class="sc">0.807</td></tr><tr><td>plausible analytics vs simple analytics</td><td><span class="tag t-pages">keyword collision</span></td><td class="ev">https://plausible.io/vs-matomo targets &#x27;plausible vs matomo: a simple, privacy-first alternative&#x27;</td><td class="sc">4.909</td></tr><tr><td>google analytics alternative for shopify</td><td><span class="tag t-pages">already covered</span></td><td class="ev">https://plausible.io/for-ecommerce — Web analytics for ecommerce: simple, accurate and privacy-friendly | Plausible Analytics</td><td class="sc">0.849</td></tr><tr><td>web analytics without cookie consent banner</td><td><span class="tag t-pages">already covered</span></td><td class="ev">https://plausible.io/wordpress-analytics-plugin — WordPress analytics plugin: no cookies, no consent banner, accurate data | Plausible Analytics</td><td class="sc">0.836</td></tr><tr><td>plausible vs umami analytics self-hosted</td><td><span class="tag t-pages">already covered</span></td><td class="ev">https://plausible.io/self-hosted-web-analytics — Plausible: Self-Hosted Google Analytics alternative | Plausible Analytics</td><td class="sc">0.804</td></tr><tr><td>google analytics 4 too complicated alternative</td><td><span class="tag t-pages">already covered</span></td><td class="ev">https://plausible.io/simple-web-analytics — Simple web analytics for people who just want the numbers | Plausible Analytics</td><td class="sc">0.835</td></tr><tr><td>web analytics for next.js app</td><td><span class="tag t-verdicts">prior verdict CONTESTED</span></td><td class="ev">&#x27;web analytics for next.js app&#x27; — Vercel Analytics has first-party advantage and official docs; Google Analytics dominates with authority. Plausible can win with a detailed comparison or &#x27;Plausible vs. Vercel/GA&#x27; angle, but the broad query is claimed by bigger players.</td><td class="sc">0.905</td></tr><tr><td>gdpr compliant analytics without ip tracking</td><td><span class="tag t-pages">already covered</span></td><td class="ev">https://plausible.io/data-policy — Plausible: GDPR, CCPA and cookie law compliant web analytics | Plausible Analytics</td><td class="sc">0.830</td></tr><tr><td>switching from matomo to plausible</td><td><span class="tag t-pages">already covered</span></td><td class="ev">https://plausible.io/vs-matomo — Plausible vs Matomo: A simple, privacy-first alternative | Plausible Analytics</td><td class="sc">0.824</td></tr><tr><td>bounce rate removed in GA4 what to use instead</td><td><span class="tag t-pages">keyword collision</span></td><td class="ev">https://plausible.io/blog/how-to-store-last-seen-for-users targets &#x27;how to store &#x27;last seen&#x27; for users in phoenix&#x27;</td><td class="sc">5.645</td></tr></tbody></table></div>
+</section>
+
+<section>
+  <h2>The briefs</h2>
+  <p class="lede">This is the deliverable — a writer should be able to start from one of these.
+  0 awaiting your approval.</p>
+  <p class="empty">No briefs yet. Either every candidate was resolved from memory, or no SERP graded WINNABLE this run.</p>
+</section>
+
+<section>
+  <h2>What the agent saw on Google</h2>
+  <p class="lede">Its read of each live search result page. These are kept, so the same
+  question is never paid for twice.</p>
+  <div class="scroller"><table class="verdicts">
+    <colgroup><col class="c-grade"><col class="c-q"><col></colgroup>
+    <thead><tr><th>Verdict</th><th>Query</th><th>Reasoning</th></tr></thead>
+    <tbody><tr><td><span class="tag t-CONTESTED">CONTESTED</span></td><td>web analytics for next.js app</td><td class="ev">Vercel Analytics has first-party advantage and official docs; Google Analytics dominates with authority. Plausible can win with a detailed comparison or &#x27;Plausible vs. Vercel/GA&#x27; angle, but the broad query is claimed by bigger players.</td></tr></tbody></table></div>
+</section>
+
+<section>
+  <h2>What it has learned</h2>
+  <p class="lede">Generalizations induced from its own results and from topics you rejected.
+  These steer what it proposes next time.</p>
+  <div class="scroller"><table class="verdicts">
+    <colgroup><col class="c-grade"><col><col class="c-grade"></colgroup>
+    <thead><tr><th></th><th>Rule</th><th style="text-align:right">Conf.</th></tr></thead>
+    <tbody><tr><td><span class="tag t-rules">avoid</span></td><td>Broad &#x27;X for [framework]&#x27; analytics queries are dominated by first-party and high-authority tools (e.g. Vercel Analytics for Next.js, Google Analytics broadly); plausible.io should target these only via explicit comparison or &#x27;Plausible vs. [dominant tool]&#x27; angles rather than the head query.</td><td class="sc">0.60</td></tr></tbody></table></div>
+</section>
+
+<footer>cairn · generated from live MongoDB Atlas data</footer>
+</div></body></html>

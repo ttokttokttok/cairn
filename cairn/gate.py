@@ -147,6 +147,15 @@ def keyword_hits(site: str, query: str, limit: int = 3) -> list[dict[str, Any]]:
     targetKeyword collision that a semantic model may score as merely similar.
     """
     db = get_db()
+    # Searches `targetKeyword` ONLY, deliberately.
+    #
+    # Including title and h1 destroys precision: a long query shares common
+    # tokens with unrelated headlines and BM25 rewards the pile-up. Measured on
+    # plausible.io, "bounce rate removed in GA4 what to use instead" matched
+    # /blog/how-to-store-last-seen-for-users at 6.08 -- ABOVE the true collision
+    # "plausible vs matomo" -> /vs-matomo at 5.65, so no threshold could split
+    # them. Restricted to targetKeyword the same pair separates cleanly:
+    # 2.34 false vs 3.07 true. Dropping fuzzy did not help; the path did.
     pipeline = [
         {
             "$search": {
@@ -157,7 +166,7 @@ def keyword_hits(site: str, query: str, limit: int = 3) -> list[dict[str, Any]]:
                         {
                             "text": {
                                 "query": query,
-                                "path": ["targetKeyword", "title", "h1"],
+                                "path": "targetKeyword",
                                 "fuzzy": {"maxEdits": 1},
                             }
                         }
@@ -196,7 +205,7 @@ def evaluate(site: str, query: str) -> Decision:
             )
 
     kw = keyword_hits(site, query)
-    if kw and kw[0]["score"] >= 3.0:
+    if kw and kw[0]["score"] >= SETTINGS.keyword_threshold:
         top = kw[0]
         return Decision(
             query=query,

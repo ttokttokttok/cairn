@@ -38,6 +38,7 @@ class Settings:
     dup_threshold: float
     verdict_reuse_threshold: float
     rule_match_threshold: float
+    keyword_threshold: float
     rule_veto_enabled: bool
 
     candidates_per_run: int
@@ -78,6 +79,9 @@ def load_settings() -> Settings:
         dup_threshold=float(os.getenv("CAIRN_DUP_THRESHOLD", "0.80")),
         verdict_reuse_threshold=float(os.getenv("CAIRN_VERDICT_THRESHOLD", "0.82")),
         rule_match_threshold=float(os.getenv("CAIRN_RULE_THRESHOLD", "0.62")),
+        # Atlas Search BM25 on targetKeyword only. Measured: true collision
+        # 3.07, false positive 2.34.
+        keyword_threshold=float(os.getenv("CAIRN_KEYWORD_THRESHOLD", "2.8")),
         # Off by default, on evidence. Rule-to-query matching compares a category
         # sentence against a short query and the margins do not separate:
         # measured true positives scored 0.636-0.661, while a verified FALSE

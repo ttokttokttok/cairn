@@ -118,6 +118,81 @@ def review(domain: str) -> None:
 
 
 @app.command()
+def briefs(
+    domain: str,
+    status: str = typer.Option(None, help="Filter: pending_approval, approved, rejected."),
+    full: bool = typer.Option(False, "--full", help="Include the section outline."),
+) -> None:
+    """Read the briefs. This is what the agent actually produced for you."""
+    site, _ = _site(domain)
+    query: dict = {"site": site}
+    if status:
+        query["status"] = status
+    docs = list(get_db().briefs.find(query).sort("createdAt", -1))
+    if not docs:
+        console.print(f"no briefs for {site} yet — run `cairn run {site}` first")
+        return
+
+    for doc in docs:
+        b = doc.get("brief") or {}
+        colour = {"approved": "green", "rejected": "red"}.get(doc.get("status"), "cyan")
+        lines = [
+            f"[bold]{doc.get('status', '').replace('_', ' ')}[/]  ·  "
+            f"{b.get('intent', '')}  ·  target: {b.get('target_keyword', '')}",
+            "",
+            f"[bold]Angle[/]\n{b.get('angle', '—')}",
+            f"\n[bold]Why now[/]\n{b.get('why_now', '—')}",
+        ]
+        if b.get("information_gain"):
+            lines.append(f"\n[bold]Information gain[/]\n{b['information_gain']}")
+        links = b.get("internal_links") or []
+        lines.append(
+            "\n[bold]Internal links[/]\n"
+            + (
+                "\n".join(
+                    f"  {l.get('anchor', '')} → {l.get('url', '')}"
+                    for l in links
+                    if isinstance(l, dict)
+                )
+                if links
+                else "  [dim]none — no pages indexed, so nothing real to link[/]"
+            )
+        )
+        if full and b.get("outline"):
+            lines.append(
+                "\n[bold]Outline[/]\n"
+                + "\n".join(f"  {i}. {s}" for i, s in enumerate(b["outline"], 1))
+            )
+        if b.get("do_not_cannibalize"):
+            lines.append(f"\n[bold]Do not cannibalize[/]\n{b['do_not_cannibalize']}")
+        if doc.get("humanFeedback"):
+            lines.append(f"\n[bold]Your rejection reason[/]\n{doc['humanFeedback']}")
+        console.print(
+            Panel("\n".join(lines), title=doc["query"], border_style=colour, padding=(1, 2))
+        )
+
+
+@app.command()
+def report(
+    domain: str,
+    out: str = typer.Option(None, help="Output path (default: <domain>-cairn.html)."),
+    open_browser: bool = typer.Option(True, "--open/--no-open", help="Open when done."),
+) -> None:
+    """Write a shareable HTML report: decisions, evidence, briefs, learned rules."""
+    import webbrowser
+    from pathlib import Path
+
+    from .report import build_report
+
+    site, _ = _site(domain)
+    path = Path(out or f"{site}-cairn.html").resolve()
+    path.write_text(build_report(site), encoding="utf-8")
+    console.print(f"wrote [bold]{path}[/]")
+    if open_browser:
+        webbrowser.open(path.as_uri())
+
+
+@app.command()
 def stats(domain: str) -> None:
     """How much of each run memory answered for free, run over run.
 
