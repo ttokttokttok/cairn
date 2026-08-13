@@ -57,13 +57,20 @@ def run(
     resume: str = typer.Option(None, help="Resume a run by id."),
     pages: int = typer.Option(None, help="Max pages to crawl."),
     candidates: int = typer.Option(None, help="Candidate topics to propose."),
+    gate_only: bool = typer.Option(
+        False, "--gate-only", help="Stop after the memory gate; skip live SERP reads."
+    ),
 ) -> None:
     """Run the pipeline against a domain."""
     from .pipeline import run_pipeline
 
     ensure_collections()
     result = run_pipeline(
-        domain, resume_run_id=resume, max_pages=pages, candidates=candidates
+        domain,
+        resume_run_id=resume,
+        max_pages=pages,
+        candidates=candidates,
+        gate_only=gate_only,
     )
     console.print(
         Panel.fit(

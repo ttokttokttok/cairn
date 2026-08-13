@@ -358,6 +358,7 @@ uv run cairn init --wait  # create collections and Atlas search indexes
 ```bash
 uv run cairn run example.com                     # full pipeline
 uv run cairn run example.com --resume <run_id>   # continue after a crash
+uv run cairn run example.com --gate-only         # dry run: stop after the memory gate
 
 uv run cairn sites                               # every site you're tracking
 

@@ -54,6 +54,7 @@ def run_pipeline(
     resume_run_id: str | None = None,
     max_pages: int | None = None,
     candidates: int | None = None,
+    gate_only: bool = False,
 ) -> dict[str, Any]:
     site, _ = normalize_domain(domain)
     max_pages = max_pages or SETTINGS.crawl_max_pages
@@ -110,6 +111,18 @@ def run_pipeline(
         store.checkpoint(run_id, "verdicts", {"survivors": survivors})
     else:
         survivors = cp.get("survivors", [])
+
+    if gate_only:
+        # Stop at the gate: show what memory decided without paying to research
+        # the survivors. Useful for a dry run, and the only part worth watching
+        # in a short demo.
+        console.print(
+            f"\n  [dim]--gate-only: stopping here. "
+            f"{len(survivors)} topic(s) would go to a live SERP read.[/]"
+        )
+        store.finish_run(run_id)
+        store.add_tokens(run_id, meter.total)
+        return {"runId": run_id, "site": site, "tokens": meter.total}
 
     # --- 3 + 4. verdicts, briefs (coupled by a change stream) ----------------
     if at_or_after("verdicts"):
