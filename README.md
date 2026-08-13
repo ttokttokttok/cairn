@@ -133,13 +133,13 @@ instead"` scored **6.08** against an unrelated post, *above* the genuine collisi
 `targetKeyword` the same pair splits cleanly at 2.34 vs 3.07.
 
 ```python
-# gate.py — the lexical half, fuzzy so near-miss keyword targets still collide
+# gate.py — the lexical half. targetKeyword only; fuzzy for near-miss keywords.
 {"$search": {
     "index": "pages_text",
     "compound": {
         "filter": [{"equals": {"path": "site", "value": site}}],
         "must":   [{"text": {"query": query,
-                             "path": ["targetKeyword", "title", "h1"],
+                             "path": "targetKeyword",
                              "fuzzy": {"maxEdits": 1}}}]}}}
 ```
 
