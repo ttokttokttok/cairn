@@ -119,7 +119,13 @@ def review(domain: str) -> None:
 
 @app.command()
 def stats(domain: str) -> None:
-    """The headline metric: tokens per accepted brief, run over run."""
+    """How much of each run memory answered for free, run over run.
+
+    Deliberately NOT "tokens per brief": as memory saturates, a run correctly
+    produces fewer briefs because less is genuinely new, so that ratio rises
+    even though the system is working. The honest measure is what share of
+    candidates were resolved without paying for a live SERP read.
+    """
     site, _ = _site(domain)
     db = get_db()
     rows = list(
@@ -144,12 +150,20 @@ def stats(domain: str) -> None:
                     }
                 },
                 {
+                    "$lookup": {
+                        "from": "verdicts",
+                        "localField": "runId",
+                        "foreignField": "runId",
+                        "as": "verdicts",
+                    }
+                },
+                {
                     "$project": {
                         "runId": 1,
                         "coldStart": 1,
                         "tokens": 1,
-                        "tokensSavedByMemory": 1,
                         "briefs": {"$size": "$briefs"},
+                        "graded": {"$size": "$verdicts"},
                         "considered": {"$size": "$topics"},
                         "vetoed": {
                             "$size": {
@@ -169,22 +183,29 @@ def stats(domain: str) -> None:
         return
 
     table = Table(title=f"{site} — memory compounding", header_style="bold")
-    for col in ("run", "start", "considered", "vetoed by memory", "briefs",
-                "tokens", "tokens/brief"):
+    for col in ("run", "start", "considered", "resolved from memory",
+                "paid SERP reads", "briefs", "tokens"):
         table.add_column(col)
     for r in rows:
-        briefs = r.get("briefs", 0)
-        per = f"{r.get('tokens', 0) // briefs:,}" if briefs else "—"
+        considered = r.get("considered", 0)
+        vetoed = r.get("vetoed", 0)
+        pct = f"{vetoed}/{considered}" + (
+            f"  ({100 * vetoed // considered}%)" if considered else ""
+        )
         table.add_row(
             r["runId"][-8:],
             "cold" if r.get("coldStart") else "warm",
-            str(r.get("considered", 0)),
-            str(r.get("vetoed", 0)),
-            str(briefs),
+            str(considered),
+            pct,
+            str(r.get("graded", 0)),
+            str(r.get("briefs", 0)),
             f"{r.get('tokens', 0):,}",
-            per,
         )
     console.print(table)
+    console.print(
+        "[dim]`resolved from memory` rising is the system working: those "
+        "candidates cost zero API calls.[/]"
+    )
 
     counts = {c: db[c].count_documents({"site": site}) for c in
               ("pages", "verdicts", "rules", "briefs")}
