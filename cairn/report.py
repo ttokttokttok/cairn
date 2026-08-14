@@ -125,7 +125,44 @@ def _field(key: str, value: Any) -> str:
     )
 
 
+def _upgrade_card(doc: dict[str, Any]) -> str:
+    """An improve-existing brief. Different shape entirely from a new-article one:
+    it targets a URL that already ranks, so there is no outline or angle."""
+    b = doc.get("brief") or {}
+    status = doc.get("status", "")
+    status_kind = {"approved": "pass", "rejected": "pages"}.get(status, "verdicts")
+
+    def _list(key: str, label: str) -> str:
+        items = b.get(key) or []
+        if not items:
+            return ""
+        li = "".join(f"<li>{_e(i)}</li>" for i in items)
+        return (
+            f'<div class="field"><div class="k">{_e(label)}</div>'
+            f'<ul class="plain">{li}</ul></div>'
+        )
+
+    return f"""
+    <article class="brief">
+      <h4>Improve an existing page — {_e(doc.get("query"))}</h4>
+      <div class="meta">
+        {_tag(status.replace("_", " ") or "pending", status_kind)}
+        {_tag("improve existing", "verdicts")}
+        <span>priority {_e(b.get("priority", "?"))}</span>
+      </div>
+      {_field("Page to change", doc.get("improveUrl"))}
+      {_field("Diagnosis — why it's stuck", b.get("diagnosis"))}
+      {_field("Rewrite the title to", b.get("title_rewrite"))}
+      {_field("Rewrite the meta description to", b.get("meta_rewrite"))}
+      {_list("content_changes", "Content changes, in order")}
+      {_list("sections_to_add", "Sections competitors have that this page lacks")}
+      {_field("Expected effect", b.get("expected_effect"))}
+    </article>"""
+
+
 def _brief_card(doc: dict[str, Any]) -> str:
+    if doc.get("kind") == "improve_existing":
+        return _upgrade_card(doc)
     b = doc.get("brief") or {}
     status = doc.get("status", "")
     status_kind = {"approved": "pass", "rejected": "pages"}.get(status, "verdicts")
@@ -210,6 +247,8 @@ def build_report(site: str) -> str:
             label = t.get("vetoReason") or "stopped"
             label = label.replace(" (cannibalization risk)", "")
             kind = t.get("vetoedBy", "").split(":")[0] or "pages"
+            if t.get("action") == "improve":
+                kind = "verdicts"  # amber: redirected, not killed
             evidence = _e(t.get("evidence"))
             score = f'{(t.get("score") or 0):.3f}'
         else:

@@ -125,6 +125,52 @@ def review(domain: str) -> None:
 
 
 @app.command()
+def connect(
+    domain: str,
+    days: int = typer.Option(None, help="Lookback window in days (default 90)."),
+) -> None:
+    """Pull Search Console performance for a site into memory.
+
+    Requires GOOGLE_SA_JSON pointing at a service-account key whose email has
+    been added as a user on the Search Console property.
+    """
+    from .gsc import GSCUnavailable, fetch_performance, service_account_email
+
+    site, _ = _site(domain)
+    ensure_collections()
+    try:
+        with console.status(f"fetching Search Console data for {site}…"):
+            rows = list(fetch_performance(site, days=days))
+            written = store.store_gsc(site, rows)
+    except GSCUnavailable as exc:
+        console.print(f"[red]{exc}[/]")
+        email = service_account_email()
+        if email:
+            console.print(
+                f"\n[dim]Add this address as a user on the property:[/]\n  [bold]{email}[/]"
+            )
+        raise typer.Exit(1)
+
+    if not rows:
+        console.print(f"connected, but Search Console returned no rows for {site}")
+        return
+
+    ranking = sum(1 for r in rows if r.position <= SETTINGS.gsc_own_position)
+    striking = sum(
+        1 for r in rows
+        if SETTINGS.gsc_own_position < r.position <= SETTINGS.gsc_striking_position
+        and r.impressions >= SETTINGS.gsc_min_impressions
+    )
+    console.print(
+        f"stored [bold]{written:,}[/] query/page rows for [bold]{site}[/]\n"
+        f"  [green]{ranking:,}[/] already ranking in the top {SETTINGS.gsc_own_position:.0f}\n"
+        f"  [yellow]{striking:,}[/] in striking distance "
+        f"(#{SETTINGS.gsc_own_position:.0f}-{SETTINGS.gsc_striking_position:.0f}, "
+        f"≥{SETTINGS.gsc_min_impressions} impressions) — these become upgrade briefs"
+    )
+
+
+@app.command()
 def sites() -> None:
     """List every site being tracked. Each one keeps its own separate memory."""
     db = get_db()
@@ -409,6 +455,18 @@ def doctor() -> None:
             rows.append(("change streams", "[yellow]unavailable — will poll[/]"))
     except Exception as exc:  # noqa: BLE001
         rows.append(("mongo ping", f"[red]{exc}[/]"))
+
+    if SETTINGS.gsc_service_account:
+        from .gsc import GSCUnavailable, list_sites, service_account_email
+
+        try:
+            props = list_sites()
+            rows.append(("search console", f"[green]{len(props)} property(ies)[/]"))
+        except (GSCUnavailable, Exception) as exc:  # noqa: BLE001
+            rows.append(("search console", f"[yellow]{str(exc)[:60]}[/]"))
+            rows.append(("  grant access to", service_account_email() or "?"))
+    else:
+        rows.append(("search console", "[dim]not configured (optional)[/]"))
 
     try:
         from run_agent import AIAgent  # noqa: F401

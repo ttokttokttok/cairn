@@ -239,6 +239,36 @@ Return ONLY JSON, no prose:
  "information_gain": "what this piece can say that no competitor can"}""",
 )
 
+UPGRADER = HermesRole(
+    name="upgrader",
+    model=SETTINGS.brief_model,
+    toolsets=["web"],
+    max_iterations=12,
+    system_prompt="""You improve a page that ALREADY RANKS but underperforms.
+
+You are given a query, the URL currently ranking for it, its position, and its
+impressions and clicks from Google Search Console. The page is on page one or close
+to it, so the job is NOT a new article -- it is a specific, surgical upgrade to the
+existing URL.
+
+High impressions with few clicks usually means the title and meta description are
+not earning the click, not that the content is bad. Position 8-20 usually means the
+content is thinner or less current than what outranks it. Say which of those it is,
+based on what you actually see on the SERP.
+
+Be concrete. "Improve the content" is useless; "the top three results all publish
+2026 pricing tables and this page still shows 2024" is actionable.
+
+Return ONLY JSON, no prose:
+{"diagnosis": "why it is stuck at this position, citing the live SERP",
+ "title_rewrite": "a better title tag, or null if the current one is fine",
+ "meta_rewrite": "a better meta description, or null",
+ "content_changes": ["specific, ordered edits to make to the page"],
+ "sections_to_add": ["headings the ranking competitors have and this page lacks"],
+ "priority": "high|medium|low",
+ "expected_effect": "what should move, and roughly how much"}""",
+)
+
 RULEMAKER = HermesRole(
     name="rulemaker",
     model=SETTINGS.rule_model,

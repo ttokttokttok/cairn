@@ -39,6 +39,13 @@ class Settings:
     verdict_reuse_threshold: float
     rule_match_threshold: float
     keyword_threshold: float
+
+    # Google Search Console (optional, strictly additive)
+    gsc_service_account: str | None
+    gsc_lookback_days: int
+    gsc_own_position: float
+    gsc_striking_position: float
+    gsc_min_impressions: int
     rule_veto_enabled: bool
 
     candidates_per_run: int
@@ -82,6 +89,15 @@ def load_settings() -> Settings:
         # Atlas Search BM25 on targetKeyword only. Measured: true collision
         # 3.07, false positive 2.34.
         keyword_threshold=float(os.getenv("CAIRN_KEYWORD_THRESHOLD", "2.8")),
+        gsc_service_account=os.getenv("GOOGLE_SA_JSON") or None,
+        gsc_lookback_days=int(os.getenv("CAIRN_GSC_DAYS", "90")),
+        # <= this position means you already own the query -> veto outright.
+        gsc_own_position=float(os.getenv("CAIRN_GSC_OWN_POSITION", "3.0")),
+        # Between own_position and this is "striking distance": you rank, but not
+        # well enough. Improving the existing page beats writing a new one.
+        gsc_striking_position=float(os.getenv("CAIRN_GSC_STRIKING", "20.0")),
+        # Below this, the demand isn't real enough to act on either way.
+        gsc_min_impressions=int(os.getenv("CAIRN_GSC_MIN_IMPRESSIONS", "50")),
         # Off by default, on evidence. Rule-to-query matching compares a category
         # sentence against a short query and the margins do not separate:
         # measured true positives scored 0.636-0.661, while a verified FALSE

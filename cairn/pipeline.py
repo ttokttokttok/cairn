@@ -15,7 +15,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from . import store
-from .agents import BRIEFER, GRADER, RULEMAKER, SCOUT
+from .agents import BRIEFER, GRADER, RULEMAKER, SCOUT, UPGRADER
 from .config import SETTINGS
 from .crawl import crawl_site, normalize_domain
 from .db import get_db
@@ -235,6 +235,7 @@ def _stage_gate(
     table.add_column("verdict")
     table.add_column("evidence from MongoDB", overflow="fold", style="dim")
 
+    improve: list = []
     for c in cands:
         d = evaluate(site, c["query"])
         saved = meter.avg_verdict_cost if not d.passed else 0
@@ -242,6 +243,14 @@ def _stage_gate(
         if d.passed:
             survivors.append(c)
             table.add_row("[green]✓[/]", c["query"], "[green]proceed[/]", d.reason)
+        elif d.action == "improve":
+            improve.append(d)
+            table.add_row(
+                "[yellow]↑[/]",
+                c["query"],
+                f"[yellow]{d.reason}[/]",
+                f"{d.evidence}  [gsc · {d.score:.2f}]",
+            )
         else:
             note_rule_applied(d)
             vetoed.append(d)
@@ -254,6 +263,13 @@ def _stage_gate(
             )
 
     console.print(table)
+    if improve:
+        console.print(
+            f"\n  [yellow]{len(improve)}[/] topic(s) you ALREADY RANK for — "
+            f"briefing upgrades to existing pages instead of new articles"
+        )
+        for d in improve:
+            _write_upgrade_brief(site, run_id, d, meter)
     saved_total = len(vetoed) * meter.avg_verdict_cost
     console.print(
         f"\n  [bold red]{len(vetoed)}[/] vetoed by memory before spending anything · "
@@ -440,6 +456,35 @@ def _write_brief(site: str, run_id: str, verdict: dict, meter: TokenMeter) -> No
     console.print(
         f"  [bold green]brief[/] {query} — angle: "
         f"[italic]{str(brief.get('angle', ''))[:110]}[/]"
+    )
+
+
+def _write_upgrade_brief(site: str, run_id: str, decision, meter: TokenMeter) -> None:
+    """Brief an improvement to a page that already ranks."""
+    doc = get_db().gsc_performance.find_one(
+        {"site": site, "page": decision.improve_url},
+        sort=[("impressions", -1)],
+    ) or {}
+    prompt = (
+        f"Query: {decision.query}\n"
+        f"Site: {site}\n"
+        f"URL already ranking: {decision.improve_url}\n"
+        f"Current position: {doc.get('position', '?')}\n"
+        f"Impressions: {doc.get('impressions', '?')}  "
+        f"Clicks: {doc.get('clicks', '?')}  CTR: {doc.get('ctr', '?')}\n\n"
+        "Read the live SERP for this query and say exactly how to upgrade that page."
+    )
+    with console.status(f"briefing upgrade for {decision.improve_url}…"):
+        reply = UPGRADER.run(prompt, task_id=f"{run_id}:upgrade")
+    meter.record(reply.tokens)
+    brief = reply.json(default={}) or {"raw": reply.text}
+    store.store_brief(
+        site, run_id, decision.query, brief,
+        kind="improve_existing", improve_url=decision.improve_url,
+    )
+    console.print(
+        f"  [bold yellow]upgrade[/] {decision.improve_url} — "
+        f"{str(brief.get('diagnosis', ''))[:100]}"
     )
 
 

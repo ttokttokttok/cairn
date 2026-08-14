@@ -37,7 +37,12 @@ def get_db() -> Database:
 # --- vector index definitions ------------------------------------------------
 # Three vector indexes, each serving a distinct veto decision in the memory gate.
 
-INDEX_NAMES = {"pages": "pages_vec", "verdicts": "verdicts_vec", "rules": "rules_vec"}
+INDEX_NAMES = {
+    "pages": "pages_vec",
+    "verdicts": "verdicts_vec",
+    "rules": "rules_vec",
+    "gsc_performance": "gsc_vec",
+}
 
 
 def _vector_field(collection: str) -> dict[str, Any]:
@@ -93,7 +98,10 @@ def ensure_collections() -> list[str]:
     """Create collections and plain indexes. Idempotent."""
     db = get_db()
     created = []
-    for name in ("sites", "pages", "topics", "verdicts", "rules", "briefs", "runs"):
+    for name in (
+        "sites", "pages", "topics", "verdicts", "rules", "briefs", "runs",
+        "gsc_performance",
+    ):
         if name not in db.list_collection_names():
             db.create_collection(name)
             created.append(name)
@@ -105,6 +113,9 @@ def ensure_collections() -> list[str]:
     db.rules.create_index([("site", ASCENDING), ("confidence", ASCENDING)])
     db.briefs.create_index([("site", ASCENDING), ("status", ASCENDING)])
     db.runs.create_index([("runId", ASCENDING)], unique=True)
+    db.gsc_performance.create_index(
+        [("site", ASCENDING), ("query", ASCENDING), ("page", ASCENDING)], unique=True
+    )
     return created
 
 

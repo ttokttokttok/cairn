@@ -361,6 +361,7 @@ uv run cairn run example.com --resume <run_id>   # continue after a crash
 uv run cairn run example.com --gate-only         # dry run: stop after the memory gate
 
 uv run cairn sites                               # every site you're tracking
+uv run cairn connect example.com                 # pull Search Console data (optional)
 
 # Seeing what the agent produced and why
 uv run cairn report example.com                  # ← standalone HTML: decisions, evidence, briefs

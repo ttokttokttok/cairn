@@ -39,7 +39,12 @@ def uses_atlas_autoembed() -> bool:
 
 
 # The field on each collection that Atlas embeds when autoEmbed is on.
-AUTOEMBED_PATH = {"pages": "embedText", "verdicts": "query", "rules": "rule"}
+AUTOEMBED_PATH = {
+    "pages": "embedText",
+    "verdicts": "query",
+    "rules": "rule",
+    "gsc_performance": "query",
+}
 
 
 def embed(texts: list[str], input_type: str = "document") -> list[list[float]]:

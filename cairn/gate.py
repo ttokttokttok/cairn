@@ -32,6 +32,18 @@ class Decision:
     vetoed_by: str = ""  # collection:_id of the memory doc responsible
     evidence: str = ""
     score: float = 0.0
+    # "proceed" | "stop" | "improve".
+    #
+    # `improve` is the outcome only Search Console can produce: we already rank
+    # for this, but not well enough. It is not a veto -- it redirects the work
+    # from "write a new article" to "upgrade the page you already have", which
+    # is usually the cheaper win.
+    action: str = ""
+    improve_url: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.action:
+            self.action = "proceed" if self.passed else "stop"
 
     @property
     def kind(self) -> str:
@@ -186,12 +198,80 @@ def keyword_hits(site: str, query: str, limit: int = 3) -> list[dict[str, Any]]:
         return []
 
 
+def gsc_decision(site: str, query: str) -> Decision | None:
+    """Search Console check. Returns None when GSC is unconfigured or silent.
+
+    This is the only check backed by the site's *own* performance rather than
+    what the sitemap claims or what the public SERP shows, so it runs first --
+    if you already rank, that fact outranks every other signal.
+    """
+    # Gate on whether the DATA exists, not on whether credentials are currently
+    # loaded. Once performance is in MongoDB it is memory like anything else, and
+    # a run on a machine without the service-account key should still use it.
+    hits = knn(
+        "gsc_performance",
+        site,
+        query,
+        limit=1,
+        projection={
+            "query": 1, "page": 1, "position": 1,
+            "impressions": 1, "clicks": 1,
+        },
+    )
+    if not hits:
+        return None
+    top = hits[0]
+    # Query-to-query similarity, the same shape as verdict reuse, so it uses the
+    # same calibrated threshold.
+    if top["score"] < SETTINGS.verdict_reuse_threshold:
+        return None
+    impressions = int(top.get("impressions", 0))
+    if impressions < SETTINGS.gsc_min_impressions:
+        return None  # too little data to act on in either direction
+
+    position = float(top.get("position", 999))
+    url, matched = top.get("page", ""), top.get("query", "")
+    common = dict(
+        query=query,
+        vetoed_by=f"gsc_performance:{top['_id']}",
+        score=top["score"],
+        improve_url=url,
+    )
+
+    if position <= SETTINGS.gsc_own_position:
+        return Decision(
+            passed=False,
+            action="stop",
+            reason=f"already ranking #{position:.0f}",
+            evidence=f"{url} ranks #{position:.1f} for '{matched}' "
+                     f"({impressions:,} impressions)",
+            **common,
+        )
+    if position <= SETTINGS.gsc_striking_position:
+        clicks = int(top.get("clicks", 0))
+        return Decision(
+            passed=False,
+            action="improve",
+            reason=f"striking distance #{position:.0f}",
+            evidence=f"{url} ranks #{position:.1f} for '{matched}' with "
+                     f"{impressions:,} impressions and only {clicks:,} clicks — "
+                     f"improve this page instead of writing a new one",
+            **common,
+        )
+    return None
+
+
 def evaluate(site: str, query: str) -> Decision:
-    """Run one candidate through all three memory checks.
+    """Run one candidate through the memory checks.
 
     No LLM calls and no web calls -- the whole point is that this is the cheap
     path. With autoEmbed the embedding happens inside the database.
     """
+    # (d) do we ALREADY RANK for this? Our own data beats every other signal.
+    gsc = gsc_decision(site, query)
+    if gsc is not None:
+        return gsc
+
     # (a) do we already cover this intent?
     for page in knn("pages", site, query, limit=3, projection={"url": 1, "title": 1}):
         if page["score"] >= SETTINGS.dup_threshold:

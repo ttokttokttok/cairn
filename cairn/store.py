@@ -112,6 +112,35 @@ def store_verdict(site: str, run_id: str, query: str, verdict: dict[str, Any]) -
     return get_db().verdicts.insert_one(doc).inserted_id
 
 
+def store_gsc(site: str, rows) -> int:
+    """Upsert Search Console performance. Text-only under autoEmbed."""
+    from pymongo import UpdateOne
+
+    ops = []
+    for r in rows:
+        fields = {
+            "impressions": r.impressions,
+            "clicks": r.clicks,
+            "ctr": r.ctr,
+            "position": r.position,
+            "fetchedAt": time.time(),
+        }
+        if not uses_atlas_autoembed():
+            fields["embedding"] = embed([r.query], input_type="query")[0]
+        ops.append(
+            UpdateOne(
+                {"site": site, "query": r.query, "page": r.page},
+                {"$set": fields},
+                upsert=True,
+            )
+        )
+    if not ops:
+        return 0
+    for i in range(0, len(ops), 1000):
+        get_db().gsc_performance.bulk_write(ops[i : i + 1000], ordered=False)
+    return len(ops)
+
+
 def store_topic(site: str, run_id: str, decision, stage_cost: int = 0) -> None:
     get_db().topics.insert_one(
         {
@@ -119,6 +148,8 @@ def store_topic(site: str, run_id: str, decision, stage_cost: int = 0) -> None:
             "runId": run_id,
             "query": decision.query,
             "status": "passed" if decision.passed else "vetoed",
+            "action": getattr(decision, "action", ""),
+            "improveUrl": getattr(decision, "improve_url", ""),
             "vetoReason": decision.reason,
             "vetoedBy": decision.vetoed_by,
             "evidence": decision.evidence,
@@ -129,7 +160,14 @@ def store_topic(site: str, run_id: str, decision, stage_cost: int = 0) -> None:
     )
 
 
-def store_brief(site: str, run_id: str, query: str, brief: dict[str, Any]) -> Any:
+def store_brief(
+    site: str,
+    run_id: str,
+    query: str,
+    brief: dict[str, Any],
+    kind: str = "new_article",
+    improve_url: str = "",
+) -> Any:
     return (
         get_db()
         .briefs.insert_one(
@@ -138,6 +176,10 @@ def store_brief(site: str, run_id: str, query: str, brief: dict[str, Any]) -> An
                 "runId": run_id,
                 "query": query,
                 "brief": brief,
+                # "new_article" or "improve_existing" -- the latter targets a URL
+                # that already ranks rather than proposing a new page.
+                "kind": kind,
+                "improveUrl": improve_url,
                 "status": "pending_approval",
                 "createdAt": time.time(),
             }
