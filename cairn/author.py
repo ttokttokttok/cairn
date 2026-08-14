@@ -29,6 +29,7 @@ from .repo import (
     Conventions,
     RepoWriter,
     assert_clean,
+    check_pr_auth,
     commit_all,
     create_branch,
     detect_conventions,
@@ -107,6 +108,25 @@ def author_brief(
     if not (repo / ".git").is_dir():
         raise SystemExit(f"{repo} is not a git repository")
     assert_clean(repo)
+
+    # Check this BEFORE the agent writes anything. Discovering a missing token
+    # after a four-thousand-word generation wastes the whole run.
+    if open_pull_request:
+        auth = check_pr_auth()
+        if not auth.ok:
+            raise SystemExit(
+                f"cannot open a pull request: {auth.problem}\n"
+                f"See docs/GITHUB_TOKEN.md, or pass --no-pr to commit locally."
+            )
+        console.print(
+            f"[dim]github: {auth.identity or 'authenticated'} via {auth.source}[/]"
+        )
+        if auth.overbroad:
+            console.print(
+                f"  [yellow]note[/] this token carries "
+                f"{', '.join(auth.overbroad)} scope — broader than this agent "
+                f"needs. See docs/GITHUB_TOKEN.md for a scoped alternative."
+            )
 
     conventions = detect_conventions(repo, content_dir)
     console.print(f"[dim]{conventions.describe()}[/]")

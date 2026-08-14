@@ -315,6 +315,59 @@ def commit_all(repo: Path, message: str) -> None:
     git(repo, "commit", "-m", message)
 
 
+@dataclass
+class PrAuth:
+    ok: bool
+    identity: str = ""
+    scopes: list[str] = field(default_factory=list)
+    source: str = ""
+    problem: str = ""
+
+    @property
+    def overbroad(self) -> list[str]:
+        """Scopes this agent has no business holding.
+
+        Our validator already refuses to write outside the content directory, but
+        the credential itself should not be able to either -- if the token cannot
+        touch CI, a bug in our code cannot become a supply-chain problem.
+        """
+        return [s for s in self.scopes if s in {"workflow", "admin:org", "delete_repo"}]
+
+
+def check_pr_auth() -> PrAuth:
+    """Verify a PR can actually be opened, before spending tokens writing one."""
+    import os
+    import shutil
+
+    if shutil.which("gh") is None:
+        return PrAuth(False, problem="the `gh` CLI is not installed")
+
+    env_token = os.getenv("GH_TOKEN") or os.getenv("GITHUB_TOKEN")
+    result = subprocess.run(
+        ["gh", "auth", "status"], capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        return PrAuth(
+            False,
+            problem="gh is not authenticated. Set GH_TOKEN to a fine-grained "
+            "token, or run `gh auth login`.",
+        )
+
+    out = result.stdout + result.stderr
+    identity = ""
+    if m := re.search(r"account (\S+)", out):
+        identity = m.group(1)
+    scopes: list[str] = []
+    if m := re.search(r"Token scopes: (.+)", out):
+        scopes = [s.strip().strip("'\"") for s in m.group(1).split(",")]
+    return PrAuth(
+        True,
+        identity=identity,
+        scopes=scopes,
+        source="GH_TOKEN" if env_token else "gh keyring",
+    )
+
+
 def open_pr(repo: Path, branch: str, title: str, body: str) -> str:
     git(repo, "push", "-u", "origin", branch)
     result = subprocess.run(

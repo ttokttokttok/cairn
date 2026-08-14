@@ -494,6 +494,17 @@ def doctor() -> None:
     else:
         rows.append(("search console", "[dim]not configured (optional)[/]"))
 
+    from .repo import check_pr_auth
+
+    pr_auth = check_pr_auth()
+    if pr_auth.ok:
+        note = f"{pr_auth.identity or 'authenticated'} via {pr_auth.source}"
+        if pr_auth.overbroad:
+            note += f"  [yellow](has {', '.join(pr_auth.overbroad)} scope)[/]"
+        rows.append(("github (author)", note))
+    else:
+        rows.append(("github (author)", f"[dim]{pr_auth.problem}[/]"))
+
     try:
         from run_agent import AIAgent  # noqa: F401
 

@@ -417,6 +417,12 @@ metadata edits, and link insertions applied.
 It ends at a **pull request, never a deploy**, and every refused change is listed in the PR body
 rather than silently dropped.
 
+The credential is scoped too, not just the code: use a fine-grained token limited to one repository
+with only **Contents** and **Pull requests** write access — see
+[`docs/GITHUB_TOKEN.md`](docs/GITHUB_TOKEN.md). A default `gh auth login` token carries `repo` and
+`workflow` scope, which would let it edit CI; cairn warns when it detects that. Auth is checked
+*before* the agent writes anything, so a bad token costs a second rather than a full generation.
+
 It does **not** touch `sitemap.xml` — static site generators regenerate that at build time, so a
 hand-edit is both unnecessary and overwritten on the next deploy.
 
