@@ -79,7 +79,7 @@ pipeline behaves exactly as it does now, and with one it gains check (d).
 
 ---
 
-## 2. A second Hermes agent with repository access
+## 2. A second Hermes agent with repository access — BUILT, see `cairn author`
 
 ### The idea
 

@@ -277,6 +277,32 @@ def report(
 
 
 @app.command()
+def author(
+    brief_id: str = typer.Argument(..., help="Brief _id (see `cairn briefs`)."),
+    repo: str = typer.Option(..., help="Path to the site's git repository."),
+    content_dir: str = typer.Option(None, help="Override content dir detection."),
+    pr: bool = typer.Option(True, "--pr/--no-pr", help="Open a pull request."),
+) -> None:
+    """Write an APPROVED brief into a site repo and open a pull request.
+
+    The agent has no filesystem access: it returns content, and cairn validates
+    every change against a permission scope before applying it. It can create
+    posts and make narrow edits inside the content directory, and nothing else.
+    """
+    from .author import author_brief
+
+    result = author_brief(brief_id, repo, content_dir=content_dir, open_pull_request=pr)
+    console.print(
+        Panel.fit(
+            f"branch [cyan]{result['branch']}[/]\n"
+            f"{result['applied']} change(s) applied · {result['denied']} denied\n"
+            + (f"[green]{result['url']}[/]" if result["url"] else "[dim]no PR opened[/]"),
+            border_style="green",
+        )
+    )
+
+
+@app.command()
 def stats(domain: str) -> None:
     """How much of each run memory answered for free, run over run.
 

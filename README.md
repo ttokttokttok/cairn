@@ -370,6 +370,9 @@ uv run cairn review example.com                  # approve/reject; rejections be
 uv run cairn memory example.com                  # rules and SERP verdicts it has stored
 uv run cairn stats example.com                   # share resolved from memory, run over run
 uv run cairn reset example.com                   # wipe memory, to demo a cold start again
+
+# Publishing (approved briefs only)
+uv run cairn author <brief-id> --repo ./my-site  # write the article, open a PR
 ```
 
 ## Degradation
@@ -387,6 +390,35 @@ Nothing hard-blocks on a missing optional dependency:
 The vector-index case matters more than it looks: silently returning zero matches would read as
 *"no duplicates found"*, the most dangerous possible failure mode for this system. That is why it
 warns instead of degrading quietly.
+
+## Publishing: the author agent
+
+`cairn author` turns an **approved** brief into a pull request against your site's repo.
+
+The security model is the point: **the agent has no filesystem tools.** It returns structured
+content, and `repo.py` decides what may be written. The blast radius is defined by a validator, not
+by whether a model respected its instructions.
+
+```
+CREATE  new markdown files inside the content directory
+EDIT    existing files there, and only:
+          - an allowlist of front-matter fields (title, description, ...)
+          - appending one internal link
+DENY    everything else — config, CI, lockfiles, source, deletes, renames,
+        overwrites, non-markdown files, and anything outside the content dir
+```
+
+Paths are `.resolve()`d before the containment check, so `../../.github/workflows/x.yml` and
+symlinks pointing out of the directory are both caught. Verified against ten escape attempts — path
+traversal, absolute paths, a symlink to `package.json`, overwriting an existing post, and editing
+protected fields like `slug`, `date`, and `draft` — **all blocked**, while legitimate creates,
+metadata edits, and link insertions applied.
+
+It ends at a **pull request, never a deploy**, and every refused change is listed in the PR body
+rather than silently dropped.
+
+It does **not** touch `sitemap.xml` — static site generators regenerate that at build time, so a
+hand-edit is both unnecessary and overwritten on the next deploy.
 
 ## Roadmap
 
